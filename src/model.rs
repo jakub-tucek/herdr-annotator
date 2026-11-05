@@ -54,12 +54,15 @@ pub struct ViewSpec {
     pub file: Option<String>,
     #[serde(default = "context_lines")]
     pub context: u32,
+    #[serde(default)]
+    pub large_diff: bool,
 }
 impl Default for ViewSpec {
     fn default() -> Self {
         Self {
             file: None,
             context: 3,
+            large_diff: false,
         }
     }
 }

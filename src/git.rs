@@ -6,7 +6,8 @@ use crate::{
 use serde_json::Value;
 use std::process::Command;
 
-const MAX_ROWS: usize = 2000;
+const MAX_ROWS: usize = 50_000;
+const MAX_DIFF_OUTPUT: usize = 8 * 1024 * 1024;
 
 pub(crate) fn run(mut command: Command) -> Result<Output> {
     let out = process::run(&mut command, MAX_OUTPUT)?;
@@ -21,6 +22,10 @@ fn hc() -> Command {
 }
 
 pub(crate) fn git(scope: &Scope, args: &[&str]) -> Result<Output> {
+    git_with_limit(scope, args, MAX_DIFF_OUTPUT)
+}
+
+fn git_with_limit(scope: &Scope, args: &[&str], diff_limit: usize) -> Result<Output> {
     let mut command = if let Some(machine) = &scope.machine {
         let mut command = hc();
         command.args([
@@ -61,6 +66,8 @@ pub(crate) fn git(scope: &Scope, args: &[&str]) -> Result<Output> {
         &mut command,
         if metadata {
             8 * 1024 * 1024
+        } else if args.first() == Some(&"diff") {
+            diff_limit
         } else {
             MAX_OUTPUT
         },
@@ -300,6 +307,7 @@ pub fn snapshot(scope: &Scope, view: &ViewSpec) -> Result<Snapshot> {
         view: ViewSpec {
             file: selected.clone(),
             context: view.context,
+            large_diff: view.large_diff,
         },
     };
     if let Some(path) = selected {
@@ -346,7 +354,7 @@ pub(crate) fn hydrate(snapshot: &mut Snapshot, paths: &[String]) -> Result<()> {
     let scope = &snapshot.scope;
     let baseline = snapshot.baseline.as_deref();
     let unified = format!("--unified={}", snapshot.view.context);
-    let mut budget = (2 * 1024 * 1024usize).saturating_sub(
+    let mut budget = MAX_DIFF_OUTPUT.saturating_sub(
         snapshot
             .files
             .iter()
@@ -391,7 +399,12 @@ pub(crate) fn hydrate(snapshot: &mut Snapshot, paths: &[String]) -> Result<()> {
                 path,
             ]
         };
-        let out = git(scope, &args)?;
+        let large = snapshot.view.large_diff && snapshot.view.file.as_deref() == Some(path);
+        let out = git_with_limit(
+            scope,
+            &args,
+            if large { MAX_DIFF_OUTPUT } else { MAX_OUTPUT },
+        )?;
         if out.code != 0 && !(args.contains(&"--no-index") && out.code == 1) {
             return Err(format!(
                 "Cannot load diff for {}: {}",
@@ -399,20 +412,46 @@ pub(crate) fn hydrate(snapshot: &mut Snapshot, paths: &[String]) -> Result<()> {
                 out.text.trim()
             ));
         }
-        let too_wide = out.text.lines().any(|line| line.len() > 8192);
-        if out.truncated || out.text.len() > budget || too_wide {
+        if !large && (out.truncated || out.text.lines().count() > 2020) {
             file.truncated = true;
-            file.note = Some("Diff exceeds preview limits; file notes only".into());
+            file.note = Some("Large diff hidden. Choose Load large diff to read it.".into());
+            continue;
+        }
+        let too_wide = out.text.lines().any(|line| line.len() > 8192);
+        if too_wide {
+            file.truncated = true;
+            file.note = Some("Diff contains lines over 8192 bytes; file notes only".into());
             budget = budget.saturating_sub(out.text.len());
         } else {
+            let limited = out.truncated || out.text.len() > budget;
+            let patch = if limited {
+                let mut end = out.text.len().min(budget);
+                while !out.text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let prefix = &out.text[..end];
+                &prefix[..prefix.rfind('\n').map_or(0, |i| i + 1)]
+            } else {
+                &out.text
+            };
+            file.rows = parse_diff(patch)?;
             budget = budget.saturating_sub(out.text.len());
-            file.rows = parse_diff(&out.text)?;
-            if file.rows.len() > MAX_ROWS {
+            if limited {
+                file.truncated = true;
+                file.note = Some("Showing the first 8 MiB of this diff; file notes only".into());
+            }
+            if !large && file.rows.len() > 2000 {
+                file.rows.clear();
+                file.truncated = true;
+                file.note = Some("Large diff hidden. Choose Load large diff to read it.".into());
+            } else if file.rows.len() > MAX_ROWS {
                 file.rows.truncate(MAX_ROWS);
                 file.truncated = true;
-                file.note = Some("Only the first 2000 rows are shown; file notes only".into());
+                file.note = Some(format!(
+                    "Only the first {MAX_ROWS} rows are shown; file notes only"
+                ));
             }
-            if file.rows.is_empty() {
+            if file.rows.is_empty() && !file.truncated {
                 file.note = Some("Binary, mode-only, submodule, or no text diff".into());
             }
         }
@@ -438,19 +477,21 @@ pub(crate) fn validation(snapshot: &Snapshot, comments: &[crate::Comment]) -> Re
         }
     }
     for (path, context) in contexts {
-        if context <= snapshot.view.context {
-            continue;
-        }
         let Some(index) = result.files.iter().position(|f| f.path == path) else {
             continue;
         };
+        if context <= snapshot.view.context && !result.files[index].truncated {
+            continue;
+        }
         let mut expanded = snapshot.clone();
         expanded.files = vec![snapshot.files[index].clone()];
         expanded.files[0].rows.clear();
         expanded.files[0].loaded = false;
         expanded.files[0].truncated = false;
         expanded.files[0].note = None;
-        expanded.view.context = context;
+        expanded.view.context = context.max(snapshot.view.context);
+        expanded.view.file = Some(path.clone());
+        expanded.view.large_diff = true;
         hydrate(&mut expanded, &[path])?;
         result.files[index] = expanded.files.remove(0);
     }

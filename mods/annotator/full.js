@@ -1,7 +1,7 @@
 import { div, list } from "gpui-kit";
 import { v_flex, h_flex, h_resizable, resizable_panel, v_virtual_list, Scrollbar, Textarea } from "gpui-base";
 import { theme, settings, setShared } from "herdr";
-import { splitRows, splitSelectionRow, selected, pendingComments, unreadItems, visibleComments, fileStats, diffReaderEntries, commentStatus, commentLocation, deliveryBlocker, reviewTargetReady } from "./review.js";
+import { splitRows, splitSelectionRow, selected, pendingComments, unreadItems, visibleComments, fileStats, diffReaderEntries, commentStatus, commentLocation, deliveryBlocker, reviewTargetReady, contextGaps } from "./review.js";
 
 function pageCards(self, id, items, render) {
   self.cardPages ??= new Map();
@@ -69,7 +69,13 @@ export function renderFull(self, cx) {
   }
   const split = self.diffStyle === "split";
   const rows = file ? split ? splitRows(file.rows) : file.rows : [];
-  const entries = diffReaderEntries(rows, unreadItems(fileComments, self.onlyUnread), split);
+  const gaps = contextGaps(file?.rows ?? [], self.contextLines);
+  const sourceIndices = new Map((file?.rows ?? []).map((row, index) => [row, index]));
+  const entries = diffReaderEntries(rows, unreadItems(fileComments, self.onlyUnread), split).flatMap(entry => {
+    const index = entry.row ? split ? entry.row.sourceIndex : sourceIndices.get(entry.row) : -1;
+    return gaps.has(index) ? [{ key: `context-${index}`, gap: gaps.get(index) }, entry] : [entry];
+  });
+  if (file && gaps.has(file.rows.length)) entries.push({ key: "context-end", gap: gaps.get(file.rows.length) });
   const byKey = new Map(entries.map(entry => [entry.key, entry]));
   const activeComments = fileComments.filter(comment => comment.id === self.activeComment || self.activeCommentIds?.includes(comment.id));
   const highlights = self.syntaxCache?.key === JSON.stringify([snapshot?.revision, file?.path]) ? self.syntaxCache.tokens : null;
@@ -86,6 +92,7 @@ export function renderFull(self, cx) {
     .on_mouse_up("left", event => { self.diffRelease = event; })
     .child(list(listId, entries.length, index => entries[index].key, index => {
       const entry = entries[index];
+      if (entry.gap) return div().w_full().min_h(30).px(14).py(6).bg(t.raised).text_color(t.accent).cursor_pointer().child(entry.gap);
       if (entry.row) return diffRow(entry.row, split, selection, t, font, marks, self, highlights);
       return entry.comments.length ? v_flex().children(entry.comments.map(comment => inlineNote(comment, comment.id === self.activeComment, t, self))) : div().h(0);
     })
@@ -95,6 +102,7 @@ export function renderFull(self, cx) {
         if (down && up && Math.hypot(up.x - down.x, up.y - down.y) > 3) return;
         const entry = byKey.get(key);
         if (!entry) return;
+        if (entry.gap) { self.expandContext(Math.min(1000000, self.contextLines + 20), cx); return; }
         if (entry.comments) {
           if (!entry.comments.length) return;
           if (hasDraft) { self.notice = "Save or cancel your draft before opening a comment."; cx.notify(); return; }
@@ -164,6 +172,7 @@ export function renderFull(self, cx) {
            .when(Boolean(selection), el => el.child(self.button("full-ask-selection", "Ask selection", cx => self.beginQuestion({ kind: "selection", selection: { side: selection.side, start: selection.start, end: selection.end } }, cx), !hasDraft))))))
       .when(self.copyMenuOpen, el => el.child(self.copyMenu(file)))
       .when(Boolean(file?.note), el => el.child(div().p(10).text_color(t.ansi3).child(file.note)))
+      .when(Boolean(file?.truncated && !file.rows.length && !snapshot.view?.large_diff), el => el.child(self.button("full-load-large-diff", "Load large diff", cx => self.loadLargeDiff(cx), !self.busy)))
        .when(split && Boolean(file), el => el.child(h_flex().h(18).flex_none().bg(t.raised).text_size(10).text_color(t.muted)
         .child(div().flex_1().px(14).child("Before"))
         .child(div().flex_1().px(14).child("After"))))

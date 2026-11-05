@@ -15,6 +15,13 @@ Click **Changes** for the sidebar, or the adjacent **↗** for a full review tab
 Opening full review again focuses the existing tab for that source checkout.
 The full view pins your checkout and source chat, with unified or side-by-side
 diffs, syntax colors, resizable panes, and expandable context.
+Click **Show more context** between hunks or at the file edges to reveal
+20 more unchanged lines around each change. **File ▾ → Full context** reveals
+the whole file within preview limits. Expansion currently applies file-wide.
+Diffs over 512 KiB or 2,000 rows stay hidden until you click **Load large diff**.
+Opted-in previews support up to 8 MiB and 50,000 rows. Beyond those limits,
+diffs keep a partial preview with file notes. Full review uses a virtual list;
+the sidebar pages through 500 rows at a time.
 
 Choose **Uncommitted**, **Last commit** (plus uncommitted work), or **Branch**
 (since merge-base, including committed and uncommitted changes). Pick a local

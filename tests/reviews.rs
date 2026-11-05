@@ -709,6 +709,64 @@ fn oversized_files_and_binary_files_stay_visible() {
 }
 
 #[test]
+fn large_diffs_above_the_old_byte_and_row_caps_are_reviewable() {
+    let f = Fixture::new(true);
+    let content: String = (0..6000)
+        .map(|n| format!("line {n}: {}\n", "source ".repeat(20)))
+        .collect();
+    assert!(content.len() > 512 * 1024);
+    fs::write(f.repo.join("large.txt"), content).unwrap();
+    let collapsed = f
+        .request(json!({"op":"snapshot","view":{"file":"large.txt"}}))
+        .unwrap();
+    let hidden = collapsed["snapshot"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == "large.txt")
+        .unwrap();
+    assert_eq!(hidden["truncated"], true);
+    assert!(hidden["rows"].as_array().unwrap().is_empty());
+    let data = f
+        .request(json!({"op":"snapshot","view":{"file":"large.txt","large_diff":true}}))
+        .unwrap();
+    let file = data["snapshot"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == "large.txt")
+        .unwrap();
+    assert_eq!(file["truncated"], false);
+    assert!(file["rows"].as_array().unwrap().len() > 6000);
+    f.request(json!({"op":"add", "view":{"file":"large.txt","large_diff":true}, "revision":data["snapshot"]["revision"], "path":"large.txt",
+        "selection":{"side":"new","start":6000,"end":6000}, "body":"Review the end"})).unwrap();
+    assert_eq!(f.snapshot()["comments"][0]["stale"], false);
+}
+
+#[test]
+fn diffs_above_the_byte_cap_keep_a_complete_line_prefix() {
+    let f = Fixture::new(true);
+    fs::write(
+        f.repo.join("large.txt"),
+        format!("{}\n", "x".repeat(999)).repeat(9000),
+    )
+    .unwrap();
+    let data = f
+        .request(json!({"op":"snapshot","view":{"file":"large.txt","large_diff":true}}))
+        .unwrap();
+    let file = data["snapshot"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == "large.txt")
+        .unwrap();
+    assert_eq!(file["truncated"], true);
+    let rows = file["rows"].as_array().unwrap();
+    assert!(rows.len() > 8000);
+    assert_eq!(rows.last().unwrap()["text"].as_str().unwrap().len(), 999);
+}
+
+#[test]
 fn invalid_machine_is_rejected_before_running_a_command() {
     let f = Fixture::new(true);
     let request = Request::Snapshot {

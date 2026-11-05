@@ -8,7 +8,7 @@ import { DraftLifecycle } from "./draft.js";
 import { GithubRefresh } from "./github-refresh.js";
 import { reviewLocation } from "./review.js";
 import { UpdateController } from "./updates.js";
-import { escapeText, copiedDiff, copiedSelection } from "./review.js";
+import { escapeText, copiedDiff, copiedSelection, contextGaps } from "./review.js";
 import { reviewOrderKey, orderedReviewFiles, existingReviewTab, deliveryBlocker, reviewTargetReady, reviewedDraft } from "./review.js";
 
 function location() {
@@ -674,7 +674,7 @@ export default class Annotator extends View {
     }
     const context = this.context;
     const token = {}; this.snapshotRequest = token;
-    const request = { op: "snapshot", scope: { ...current.scope, comparison: { mode: this.mode, base: this.baseExplicit ? this.base : null } }, view: { file: this.open, context: this.contextLines } };
+    const request = { op: "snapshot", scope: { ...current.scope, comparison: { mode: this.mode, base: this.baseExplicit ? this.base : null } }, view: { file: this.open, context: this.contextLines, large_diff: this.largeDiffs?.has(this.navigationKey()) ?? false } };
     this.busy = true;
     cx.spawn(async cx => {
       try {
@@ -897,6 +897,13 @@ export default class Annotator extends View {
     if (this.busy) return;
     this.contextLines = lines; this.rememberFull({ contextLines: lines });
     if (!this.editor.value().trim()) this.selection = null;
+    this.refresh(cx, false, true);
+  }
+
+  loadLargeDiff(cx) {
+    if (this.busy) return;
+    this.largeDiffs ??= new Set();
+    this.largeDiffs.add(this.navigationKey());
     this.refresh(cx, false, true);
   }
 
@@ -1149,8 +1156,16 @@ export default class Annotator extends View {
   }
 
   codeRows(file, comments, t) {
+    if (file.truncated && !file.rows.length && !this.data?.snapshot.view?.large_diff)
+      return [this.button("load-large-diff", "Load large diff", cx => this.loadLargeDiff(cx), !this.busy)];
     const inline = comments.filter(c => c.path === file.path && !c.stale && c.position);
-    return file.rows.flatMap((row, i) => {
+    const gaps = contextGaps(file.rows, this.contextLines);
+    const expand = i => this.button(`inline-context-${i}`, gaps.get(i), cx => this.expandContext(Math.min(1000000, this.contextLines + 20), cx), !this.busy);
+    const pageKey = JSON.stringify([this.data?.snapshot.revision, file.path]);
+    if (this.codePageKey !== pageKey) { this.codePageKey = pageKey; this.codePage = 0; }
+    const pageSize = 500, pages = Math.ceil(file.rows.length / pageSize), start = this.codePage * pageSize;
+    const result = file.rows.slice(start, start + pageSize).flatMap((row, offset) => {
+      const i = start + offset;
       const active = selected(row, this.selection);
       const selectable = !file.truncated && (row.old != null || row.new != null);
       const code = h_flex().id(`diff-${i}`).w_full().min_h(25).py(3).flex_none().gap(5).pr(8).items_start()
@@ -1172,8 +1187,14 @@ export default class Annotator extends View {
         .child(div().w(10).flex_none().text_color(row.kind === "add" ? t.ansi2 : row.kind === "delete" ? t.ansi1 : t.dim)
           .child(row.kind === "add" ? "+" : row.kind === "delete" ? "−" : ""))
         .child(this.codeText(row, null, t, this.syntaxCache?.tokens));
-      return [code, ...inline.filter(c => inlineAt(c, row)).map(c => this.commentCard(c, t))];
+      return [...(gaps.has(i) ? [expand(i)] : []), code, ...inline.filter(c => inlineAt(c, row)).map(c => this.commentCard(c, t))];
     });
+    if (start + pageSize >= file.rows.length && gaps.has(file.rows.length)) result.push(expand(file.rows.length));
+    if (pages > 1) result.unshift(h_flex().gap(6).items_center()
+      .child(this.button("code-previous", "Previous rows", cx => { this.codePage--; cx.notify(); }, this.codePage > 0))
+      .child(div().child(`${this.codePage + 1} / ${pages}`))
+      .child(this.button("code-next", "Next rows", cx => { this.codePage++; cx.notify(); }, this.codePage + 1 < pages)));
+    return result;
   }
 
   render(cx) {

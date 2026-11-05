@@ -233,6 +233,15 @@ pub(crate) fn run(command: &mut Command, limit: usize) -> Result<Output> {
     })?;
     // Child has been reaped and both pipes reached EOF. No cancellation needed.
     running.1 = true;
+    // A byte cap may split the final UTF-8 character. Drop only that incomplete
+    // suffix; invalid bytes within the captured output still fail strictly.
+    if stdout.truncated {
+        if let Err(error) = std::str::from_utf8(&stdout.bytes) {
+            if error.error_len().is_none() {
+                stdout.bytes.truncate(error.valid_up_to());
+            }
+        }
+    }
     let text = String::from_utf8(stdout.bytes)
         .map_err(|_| format!("Non-UTF-8 command output: {}", diagnostics.trim()))?;
     Ok(Output {
@@ -271,6 +280,20 @@ mod tests {
         assert_eq!(out.text, "reply\n");
         assert!(out.failure("test").contains("denied"));
         assert!(out.failure("test").contains("reply"));
+    }
+
+    #[test]
+    fn truncated_utf8_keeps_only_complete_characters() {
+        let out = run(&mut python("print('é' * 10)"), 5).unwrap();
+        assert!(out.truncated);
+        assert_eq!(out.text, "éé");
+        assert!(
+            run(
+                &mut python("import sys; sys.stdout.buffer.write(b'\\xff' * 10)"),
+                5
+            )
+            .is_err()
+        );
     }
 
     #[test]

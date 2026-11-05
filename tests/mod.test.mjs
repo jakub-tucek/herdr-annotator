@@ -858,6 +858,47 @@ test("late files and context changes request fresh lazy previews", async () => {
   assert.equal(h.mod.editor.value(), "draft");
 });
 
+for (const full of [false, true]) test(`${full ? "full" : "sidebar"} expands context inline without opening File actions`, async () => {
+  const h = harness(); h.state.props = { presentation: full ? "full" : "sidebar" }; h.mod.init({}, h.cx); await h.drain();
+  h.mod.data.snapshot.files[0].rows = [
+    { kind: "hunk", text: "@@ -30,1 +30,1 @@" },
+    { kind: "add", new: 30, text: "changed" },
+  ];
+  h.mod.render(h.cx);
+  if (full) {
+    const gapIndex = Array.from({ length: h.state.diffList.count }, (_, i) => i).find(i => h.state.diffList.key(i) === "context-0");
+    assert.notEqual(gapIndex, undefined);
+    assert.ok(h.state.diffList.render(gapIndex));
+    h.nodes.filter(n => n.id === h.state.diffList.id).at(-1).events.on_item_click("context-0", h.cx);
+  } else h.nodes.find(n => n.id === "inline-context-0").events.on_click(null, h.cx);
+  await h.drain();
+  assert.equal(h.requests.at(-1).view.context, 23);
+});
+
+test("large sidebar previews mount only one page of source rows", async () => {
+  const h = harness(); h.mod.init({}, h.cx); await h.drain();
+  h.mod.data.snapshot.files[0].rows = Array.from({ length: 1500 }, (_, n) => ({ kind: "add", new: n + 1, text: `line ${n + 1}` }));
+  h.mod.render(h.cx);
+  assert.equal(h.nodes.filter(n => /^diff-\d+$/.test(n.id ?? "")).length, 500);
+  h.nodes.find(n => n.id === "code-next").events.on_click(null, h.cx);
+  h.nodes.length = 0; h.mod.render(h.cx);
+  assert.equal(h.nodes.filter(n => /^diff-\d+$/.test(n.id ?? "")).length, 500);
+  assert.ok(h.nodes.some(n => n.id === "diff-500"));
+});
+
+for (const full of [false, true]) test(`${full ? "full" : "sidebar"} loads large diffs only after explicit opt-in for that file`, async () => {
+  const h = harness(); h.state.props = { presentation: full ? "full" : "sidebar" };
+  h.mod.init({}, h.cx); await h.drain();
+  assert.equal(h.requests.find(r => r.op === "snapshot").view.large_diff, false);
+  Object.assign(h.mod.data.snapshot.files[0], { truncated: true, rows: [], note: "Large diff hidden" });
+  h.mod.render(h.cx);
+  const id = full ? "full-load-large-diff" : "load-large-diff";
+  h.nodes.find(n => n.id === id).events.on_click(null, h.cx); await h.drain();
+  assert.equal(h.requests.at(-1).view.large_diff, true);
+  h.mod.selectFile("another.rs", h.cx); await h.drain();
+  assert.equal(h.requests.at(-1).view.large_diff, false);
+});
+
 test("Branch comparison and base are independent of Code and Comments tabs", async () => {
   const h = harness(); h.mod.init({}, h.cx); await h.drain();
   h.mod.changeComparison("branch", "origin/main", h.cx); await h.drain();

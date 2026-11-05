@@ -1,6 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { selectionFor, selectionPayload, selected, inlineAt, pendingComments, sessionTarget, fileStats, pathParts, commentStatus, commentLocation, reviewSummary, sendHint, visibleComments, unreadItems, snapshotFailure, diffReaderEntries, splitRows } from "../mods/annotator/review.js";
+import { selectionFor, selectionPayload, selected, inlineAt, pendingComments, sessionTarget, fileStats, pathParts, commentStatus, commentLocation, reviewSummary, sendHint, visibleComments, unreadItems, snapshotFailure, diffReaderEntries, splitRows, contextGaps } from "../mods/annotator/review.js";
+
+test("inline context controls cover leading, middle and trailing gaps without changing rows", () => {
+  const rows = [
+    { kind: "hunk", text: "@@ -10,4 +10,4 @@" },
+    { kind: "add", new: 10, text: "changed" },
+    ...[11, 12, 13].map(n => ({ kind: "context", old: n, new: n, text: "same" })),
+    { kind: "hunk", text: "@@ -30,4 +30,4 @@" },
+    { kind: "delete", old: 30, text: "old" },
+    { kind: "add", new: 30, text: "new" },
+    ...[31, 32, 33].map(n => ({ kind: "context", old: n, new: n, text: "same" })),
+  ];
+  const before = JSON.stringify(rows), gaps = contextGaps(rows, 3);
+  assert.deepEqual([...gaps.keys()], [0, 5, rows.length]);
+  assert.match(gaps.get(0), /9 hidden/);
+  assert.match(gaps.get(5), /16 hidden/);
+  assert.equal(JSON.stringify(rows), before);
+  assert.equal(contextGaps(rows, 1000000).size, 0);
+  assert.equal(contextGaps([], 3).size, 0);
+  assert.equal(contextGaps([{ kind: "hunk", text: "@@ -0,0 +1,2 @@" }, { kind: "add", text: "new" }], 3).size, 0);
+});
 
 test("ordinary folders are a distinct empty-checkout state, including remote diagnostics", () => {
   const diagnostic = "fatal: not a git repository (or any of the parent directories): .git";

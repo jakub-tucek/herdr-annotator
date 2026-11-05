@@ -53,6 +53,33 @@ export function copiedDiff(file) {
   return file.rows.map(row => `${row.kind === "add" ? "+" : row.kind === "delete" ? "-" : row.kind === "context" ? " " : ""}${row.text}`).join("\n");
 }
 
+// Insertion points in the original rows. Keep source indices unchanged for
+// hunk questions, selections and saved anchors.
+export function contextGaps(rows, context = 3) {
+  const gaps = new Map();
+  if (context >= 1000000) return gaps;
+  let oldEnd = 0, newEnd = 0, trailing = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (row.kind === "hunk") {
+      const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(row.text);
+      if (!match) continue;
+      const oldStart = Number(match[1]), newStart = Number(match[3]);
+      const hidden = Math.min(oldStart - oldEnd - 1, newStart - newEnd - 1);
+      if (hidden > 0) gaps.set(i, `↕ Show more context · ${hidden} hidden lines`);
+      oldEnd = oldStart + Number(match[2] ?? 1) - 1;
+      newEnd = newStart + Number(match[4] ?? 1) - 1;
+      trailing = 0;
+    } else if (row.kind === "context") trailing++;
+    else if (row.kind === "add" || row.kind === "delete") trailing = 0;
+  }
+  // Git emits fewer trailing lines at EOF. At exactly the context limit
+  // there may be more; a full-context request resolves that boundary.
+  if (rows.some(row => row.kind === "hunk") && trailing >= context)
+    gaps.set(rows.length, "↓ Show more context below");
+  return gaps;
+}
+
 export function copiedSelection(file, selection) {
   return selection ? file.rows.filter(row => selected(row, selection)).map(row => row.text).join("\n") : "";
 }
