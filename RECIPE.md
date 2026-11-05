@@ -22,6 +22,10 @@ Context buttons expand unchanged lines by 20, request full context, or collapse.
 The full-tab icon opens a pinned standalone review: collapsible file navigator
 and wide virtualized unified/split diff with inline comments. A third comments
 column is optional, off by default. The composer opens on demand.
+Keep full-review chrome compact: 42px header, 34px view row and file row,
+36px footer. Review settings/order/filter controls live behind Review ▾;
+context/copy/ask/file-comment controls live behind File ▾. Do not shrink code.
+The general-note field is absent until Review & send… opens confirmation.
 Full reviews default to Branch and remember comparison mode, diff style, pane
 visibility, unread filter, context size and widths. Base refs stay checkout-specific.
 Syntax/Plain is a saved toggle. A bounded lexer colors source tokens with theme
@@ -95,8 +99,11 @@ tab restores it. Respect manual sidebar toggles and do not replace a Files panel
 
 Bind to the current tab's focused agent session automatically. Keep that binding
 when the composer takes focus; never guess between multiple chats or across tabs.
-Each Send click resolves the current chat again and submits with Enter immediately,
-without an extra confirmation. Disable repeat clicks while delivery is running.
+Review & send… resolves and pins the current chat, then opens a compact composer
+with the optional general note, Send review and Cancel. Escape/Cancel retains
+the note. Final Send revalidates the pinned recipient; never redirect an open
+confirmation to a replacement chat. Permit note-only reviews. Navigation closes
+confirmation without losing its note. Disable repeat clicks during delivery.
 Idle and working agents can receive review feedback. Validate the observed
 status, then submit through `hc send --if idle` or `hc send --if working` so
 core checks it atomically. Never use --force or retry a status race automatically.
@@ -106,9 +113,9 @@ Requeue requires another explicit decision. Tests never send to a real agent.
 After confirmed delivery, focus the exact recipient pane. Never focus another
 chat if it disappeared, and never change focus on failed or uncertain delivery.
 Cmd+Enter / Ctrl+Enter saves one comment when its composer contains text. With no
-unfinished comments in the comparison, the shortcut sends the batch instead,
-including from an empty composer or the general-note field. One press must never
-save and send. Keep nested edit/question/reply/ref-picker shortcuts separate;
+unfinished comments in the comparison, the shortcut opens confirmation. The
+next press in its general-note field sends. One press must never save and send,
+or open confirmation and submit it. Keep nested edit/question/reply/ref-picker shortcuts separate;
 ignore held/shift/alt chords and retain all normal delivery guards.
 After a keyboard save, keep the empty native comment composer mounted and
 focused so the next press still emits submit. Mod focus commands and review

@@ -44,8 +44,9 @@ Branch names and full-review checkout/file paths support selection too;
 
 ### 3. Send to the source session
 
-Add an optional **General note** beside **Send review** for overall direction. It
-appears after comments and GitHub threads, can be sent alone, and is included in exports.
+Click **Review & send…** to open an optional **General note**, then **Send review**.
+The note appears after comments and GitHub threads, can be sent alone, and is
+included in exports. Cancel or Escape closes the composer without discarding it.
 
 **Send review** submits saved comments and queued GitHub threads as one message,
 with file paths and source excerpts. It uses the chat in your source tab and
@@ -54,8 +55,11 @@ or bypasses permission prompts. A working agent may queue or act on the message
 according to its own behavior.
 
 **⌘Enter / Ctrl+Enter** saves the comment you are typing. With no unfinished
-comments in this comparison, it sends the review, including your general note.
-It never saves a comment and sends the review in the same press.
+comments, it opens the send composer; press again there to send. One press never
+saves and sends, or opens confirmation and submits it.
+
+Full review keeps code space clear: **Review ▾** holds ordering, filters and view
+settings; **File ▾** holds context expansion, file comments, copy and ask actions.
 
 After confirmed delivery, sent comments disappear from lists, diffs, and badges.
 **Show sent/resolved** reveals the history. Uncertain delivery stays visible;

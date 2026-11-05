@@ -91,14 +91,16 @@ that source binding or enable the full presentation.
    saving. Closing/reloading loses unsaved drafts, not saved comments.
 6. **Export** shows selectable feedback text without sending anything.
    With no unfinished comments in the current comparison, **⌘Enter / Ctrl+Enter**
-   sends the saved review and general note. This works in either review view,
-   including from the empty comment composer or general-note field. A press that
-   saves a comment never also sends the batch. Unfinished replies/ref pickers
+   opens the send composer. Press it again in the general-note field to send.
+   This works in either review view. One press never saves and sends, or opens
+   confirmation and submits it. Unfinished replies/ref pickers
    keep their own keyboard behavior. Normal delivery guards still apply.
 7. The panel binds automatically to the **open agent session in the current tab**.
-    Click **Send review** once. It immediately submits the saved batch using
-   `hc send --if idle` or `hc send --if working`, including Enter; there is no
-   second confirmation. A working agent may queue or act on the message;
+   Click **Review & send…**, optionally add a general note, then **Send review**.
+   Cancel or Escape keeps the note for later. The confirmation pins the source
+   recipient; a changed chat requires cancelling and reopening it.
+   Final Send submits using `hc send --if idle` or `hc send --if working`,
+   including Enter. A working agent may queue or act on the message;
    Annotator does not promise which behavior the agent implements.
    Never submits automatically or uses `--force`. No real agent receives test
    text during development checks.
@@ -108,6 +110,11 @@ keeps the last focused chat from that tab. With multiple chats, focus the intend
 one first; another tab is never chosen automatically. Each click resolves the
 current chat again. Idle and working sessions can receive reviews. Blocked,
 unknown, and unreported sessions cannot receive them.
+
+In full review, **Review ▾** contains ordering, unread/history filters, syntax,
+the optional comments pane, and updates. **File ▾** contains context expansion,
+file comments, copy, and ask actions. The general-note field stays hidden until
+you open the send composer; the code font size is unchanged.
 
 An ordinary folder outside Git shows a neutral **Not a Git checkout** state,
 not an error. With no folder selected, the panel asks you to select a checkout.

@@ -22,6 +22,7 @@ function harness() {
         else if (key === "selectable") data.selectable = args[0];
         else if (key === "opacity") data.opacity = args[0];
         else if (key === "transition") data.transition = args;
+        else if (key === "h") data.height = args[0];
         else if (key === "child") data.children.push(args[0]);
         else if (key === "children") data.children.push(...args[0]);
         else if (key === "when" && args[0]) args[1](proxy);
@@ -109,6 +110,11 @@ function harness() {
   return { mod, nodes, requests, state, cx, drain, snapshot };
 }
 
+function openFullOptions(h) {
+  h.nodes.find(node => node.id === "full-review-options").events.on_click({}, h.cx);
+  h.nodes.length = 0; h.mod.render(h.cx);
+}
+
 test("saving sends the reviewed source anchor and keeps text on stale-code refusal", async () => {
   const h = harness(); h.mod.init({}, h.cx); await h.drain();
   h.mod.selection = { side: "new", start: 2, end: 2 };
@@ -140,6 +146,88 @@ test("copy confirmation animates on the clicked button, resets, and cancels old 
   assert.ok(h.nodes.at(-1).children.includes("Copy error"));
   h.nodes.at(-1).events.on_click({}, h.cx); h.mod.close();
   assert.equal(h.state.timers.at(-1).cancelled, true);
+});
+
+for (const full of [false, true]) test(`${full ? "full" : "sidebar"} opens a send composer only on request and preserves cancelled notes`, async () => {
+  const h = harness(); h.state.props = full ? { presentation: "full" } : {};
+  h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
+  assert.equal(h.nodes.some(node => node.id === "review-general-note"), false);
+  h.nodes.find(node => node.id === (full ? "full-send" : "send-review")).events.on_click({}, h.cx);
+  await h.drain();
+  assert.equal(h.requests.some(request => request.op === "send"), false);
+  h.nodes.length = 0; h.mod.render(h.cx);
+  assert.equal(h.nodes.some(node => node.id === "review-general-note"), true);
+  assert.equal(h.state.focusedInput, h.mod.reviewNote.editor);
+  h.mod.reviewNote.editor.set_value("Overall direction");
+  h.nodes.find(node => node.id === "review-send-cancel").events.on_click({}, h.cx);
+  assert.equal(h.mod.reviewSendOpen, false);
+  assert.equal(h.mod.reviewNote.editor.value(), "Overall direction");
+  h.mod.beginReviewSend(h.cx); h.nodes.length = 0; h.mod.render(h.cx);
+  h.nodes.find(node => node.id === "review-send-confirm").events.on_click({}, h.cx); await h.drain();
+  assert.equal(h.requests.filter(request => request.op === "send").length, 1);
+  assert.equal(h.requests.at(-1).note, "Overall direction");
+  assert.equal(h.mod.reviewSendOpen, false);
+});
+
+test("send confirmation refuses a replacement recipient and allows a note-only review", async () => {
+  const h = harness(); h.mod.init({}, h.cx); await h.drain();
+  h.mod.beginReviewSend(h.cx);
+  h.state.agents.push({ address: "t8", pane: "p8", space: "space1", tab: "tab1", status: "idle" });
+  h.state.focus = { terminal: "t8", pane: "p8" };
+  h.mod.confirmReviewSend(h.cx); await h.drain();
+  assert.equal(h.requests.some(request => request.op === "send"), false);
+  assert.match(h.mod.notice, /source chat changed/i);
+  h.mod.cancelReviewSend(h.cx); h.mod.data.comments = [];
+  h.mod.beginReviewSend(h.cx);
+  assert.equal(h.mod.reviewSendOpen, true);
+  h.mod.reviewNote.editor.set_value("Note only");
+  h.mod.confirmReviewSend(h.cx); await h.drain();
+  assert.equal(h.requests.at(-1).op, "send");
+  assert.equal(h.requests.at(-1).target, "t8");
+});
+
+test("Escape and review navigation close confirmation without dropping its note", async () => {
+  for (const action of ["escape", "file", "selection", "comparison", "checkout", "branch"]) {
+    const h = harness(); h.mod.init({}, h.cx); await h.drain();
+    h.mod.beginReviewSend(h.cx); h.mod.reviewNote.editor.set_value("Keep this direction");
+    const note = h.mod.reviewNote;
+    if (action === "escape") h.mod.handleKey({ key: "escape" }, h.cx);
+    if (action === "file") h.mod.selectFile("a.rs", h.cx);
+    if (action === "selection") h.mod.selectLine(h.mod.data.snapshot.files[0].rows[0], {}, h.cx);
+    if (action === "comparison") h.mod.changeComparison("last_commit", null, h.cx);
+    if (action === "checkout") { h.state.scope = { repo: "/another", machine: null }; h.mod.refresh(h.cx); }
+    if (action === "branch") {
+      h.state.reply = async () => {
+        const data = h.snapshot(); data.snapshot.branch = "another";
+        return { code: 0, stdout: JSON.stringify({ ok: true, data }) };
+      };
+      h.mod.refresh(h.cx, true);
+    }
+    await h.drain();
+    assert.equal(h.mod.reviewSendOpen, false, action);
+    assert.equal(h.mod.reviewSend, null, action);
+    assert.equal(note.editor.value(), "Keep this direction", action);
+    h.mod.confirmReviewSend(h.cx); await h.drain();
+    assert.equal(h.requests.some(request => request.op === "send"), false, action);
+  }
+});
+
+test("full reader keeps compact chrome and reveals secondary controls only on demand", async () => {
+  const h = harness(); h.state.props = { presentation: "full" };
+  h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
+  for (const [id, height] of [["full-review-header", 42], ["full-view-toolbar", 34], ["full-file-toolbar", 34], ["full-review-footer", 36]]) {
+    assert.equal(h.nodes.find(node => node.id === id).height, height);
+  }
+  for (const id of ["full-order-logically", "full-unread", "full-syntax", "full-context-all", "full-ask-file", "full-new-file-comment", "review-general-note"]) {
+    assert.equal(h.nodes.some(node => node.id === id), false, id);
+  }
+  openFullOptions(h);
+  assert.equal(h.nodes.some(node => node.id === "full-order-logically"), true);
+  assert.equal(h.nodes.some(node => node.id === "full-syntax"), true);
+  h.nodes.find(node => node.id === "full-file-actions").events.on_click({}, h.cx);
+  h.nodes.length = 0; h.mod.render(h.cx);
+  assert.equal(h.nodes.some(node => node.id === "full-context-all"), true);
+  assert.equal(h.nodes.some(node => node.id === "full-ask-file"), true);
 });
 
 for (const full of [false, true]) test(`${full ? "full" : "sidebar"} omits repeated composer and footer instructions`, async () => {
@@ -179,8 +267,11 @@ for (const full of [false, true]) test(`${full ? "full" : "sidebar"} review incl
   h.mod.data.comments = [];
   h.mod.reviewNote.editor.set_value("Please keep this change small.");
   h.mod.render(h.cx);
-  assert.ok(h.nodes.some(n => n.id === "review-general-note"));
+  assert.equal(h.nodes.some(n => n.id === "review-general-note"), false);
   h.nodes.filter(n => n.id === (full ? "full-send" : "send-review")).at(-1).events.on_click(null, h.cx);
+  h.nodes.length = 0; h.mod.render(h.cx);
+  assert.ok(h.nodes.some(n => n.id === "review-general-note"));
+  h.nodes.find(n => n.id === "review-send-confirm").events.on_click(null, h.cx);
   await h.drain();
   assert.equal(h.requests.at(-1).note, "Please keep this change small.");
   assert.equal(h.mod.reviewNote.editor.value(), "");
@@ -204,18 +295,19 @@ test("failed general note sends keep text and require checking chat before retry
   const h = harness(); h.mod.init({}, h.cx); await h.drain();
   h.mod.reviewNote.editor.set_value("Keep this note");
   h.state.reply = request => { if (request.op === "send") throw new Error("Delivery not confirmed"); };
-  h.mod.sendToSession(h.cx); await h.drain();
+  h.mod.beginReviewSend(h.cx); h.mod.confirmReviewSend(h.cx); await h.drain();
   assert.equal(h.mod.reviewNote.editor.value(), "Keep this note");
-  h.mod.sendToSession(h.cx); await h.drain();
+  assert.equal(h.mod.reviewSendOpen, true);
+  h.mod.confirmReviewSend(h.cx); await h.drain();
   assert.equal(h.requests.filter(r => r.op === "send").length, 1);
   h.mod.render(h.cx);
   h.nodes.filter(n => n.id === "review-note-checked").at(-1).events.on_click(null, h.cx);
-  h.state.reply = null; h.mod.sendToSession(h.cx); await h.drain();
+  h.state.reply = null; h.mod.confirmReviewSend(h.cx); await h.drain();
   assert.equal(h.requests.filter(r => r.op === "send").length, 2);
   assert.equal(h.mod.reviewNote.editor.value(), "");
 });
 
-test("one click sends saved comments; rendering alone never sends", async () => {
+test("review and confirm sends once; rendering and opening the composer never send", async () => {
   const h = harness(); h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
   assert.ok(h.nodes.some(n => n.id === "diff-0"));
   assert.ok(h.nodes.some(n => n.id === "note-note1"));
@@ -223,8 +315,11 @@ test("one click sends saved comments; rendering alone never sends", async () => 
    assert.equal(h.requests.length, 2); // Snapshot and read-only GitHub fetch; rendering never sends.
   assert.equal(h.mod.currentSession().address, "t7");
   h.nodes.filter(n => n.id === "send-review").at(-1).events.on_click(null, h.cx);
+  assert.equal(h.mod.busy, false);
+  assert.equal(h.requests.some(request => request.op === "send"), false);
+  h.mod.confirmReviewSend(h.cx);
   assert.equal(h.mod.busy, true);
-  h.mod.sendToSession(h.cx); // A second click during delivery cannot enqueue another send.
+  h.mod.confirmReviewSend(h.cx); // A second click during delivery cannot enqueue another send.
   await h.drain();
   assert.equal(h.requests.at(-1).op, "send"); assert.equal(h.requests.at(-1).target, "t7");
   assert.equal(h.requests.filter(r => r.op === "send").length, 1);
@@ -322,6 +417,9 @@ test("delete needs explicit confirmation and never exposes editing for delivery 
 for (const full of [false, true]) test(`${full ? "full" : "sidebar"} quick ask sends a question only after explicit Send`, async () => {
   const h = harness(); h.state.props = full ? { presentation: "full" } : {};
   h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
+  if (full) {
+    h.nodes.find(n => n.id === "full-file-actions").events.on_click({}, h.cx); h.mod.render(h.cx);
+  }
   h.nodes.find(n => n.id === (full ? "full-ask-file" : "ask-file")).events.on_click(null, h.cx);
   assert.equal(h.requests.filter(r => r.op === "ask").length, 0);
   h.mod.questionDraft.editor.set_value("Why this change?");
@@ -408,6 +506,7 @@ test("Last commit remains selectable when the initial Branch comparison fails", 
     : { code: 0, stdout: JSON.stringify({ ok: true, data: h.snapshot() }) };
   h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
   assert.equal(h.mod.data, null);
+  h.nodes.find(n => n.id === "full-scope-menu").events.on_click({}, h.cx); h.mod.render(h.cx);
   const button = h.nodes.find(n => n.id === "full-scope-last-commit");
   assert.equal(typeof button.events.on_click, "function", "a failed branch load cannot trap the comparison picker");
   button.events.on_click(null, h.cx); await h.drain();
@@ -511,6 +610,7 @@ for (const full of [false, true]) test(`${full ? "full review" : "sidebar"} hide
   assert.ok(!nodes.some(n => n.id === "note-closed" || n.id === "note-missing"));
    if (full) assert.equal(h.state.diffList.count, 3, "stable source/note slots omit resolved content");
   const toggle = full ? "full-resolved" : "filter-resolved";
+  if (full) { openFullOptions(h); nodes = render(); }
   nodes.find(n => n.id === toggle).events.on_click(null, h.cx);
   assert.equal(h.state.shared["annotator.showResolved"], true);
   h.mod.view = "comments"; nodes = render();
@@ -542,6 +642,7 @@ for (const full of [false, true]) test(`${full ? "full review" : "sidebar"} hide
   h.mod.view = "github"; nodes = render();
   assert.ok(!nodes.some(n => n.id === "thread-sent-thread"));
   assert.ok(nodes.some(n => n.id === "thread-uncertain-thread"));
+  if (full) { openFullOptions(h); nodes = render(); }
   nodes.find(n => n.id === (full ? "full-resolved" : "filter-resolved")).events.on_click(null, h.cx);
   nodes = render(); assert.ok(nodes.some(n => n.id === "thread-sent-thread"));
   h.mod.view = "comments"; nodes = render(); assert.ok(nodes.some(n => n.id === "note-note1"));
@@ -660,12 +761,14 @@ test("comments on a file that leaves the diff render once, as outdated notes", a
   assert.equal(h.nodes.filter(n => n.id === "note-note1").length, 1);
 });
 
-test("one-click send resolves the current chat rather than a stale recipient", async () => {
+test("opening send resolves the current chat rather than a stale recipient", async () => {
   const h = harness(); h.mod.init({}, h.cx); await h.drain();
   h.state.agents.push({ address: "t8", pane: "p8", space: "space1", tab: "tab1", status: "idle" });
   h.mod.render(h.cx); // Initially displays t7.
   h.state.focus = { terminal: "t8", pane: "p8" };
   h.nodes.filter(n => n.id === "send-review").at(-1).events.on_click(null, h.cx); await h.drain();
+  assert.equal(h.requests.filter(r => r.op === "send").length, 0);
+  h.mod.confirmReviewSend(h.cx); await h.drain();
   assert.equal(h.requests.filter(r => r.op === "send").length, 1);
   assert.equal(h.requests.at(-1).target, "t8");
 });
@@ -965,9 +1068,11 @@ test("full reader defaults to two columns with inline notes and an on-demand com
   assert.equal(h.mod.editDraft.id, "note1");
   h.nodes.filter(n => n.id === "cancel-edit-note1").at(-1).events.on_click(null, h.cx);
   h.mod.render(h.cx);
+  h.nodes.find(n => n.id === "full-file-actions").events.on_click({}, h.cx); h.mod.render(h.cx);
   h.nodes.filter(n => n.id === "full-new-file-comment").at(-1).events.on_click(null, h.cx);
   h.mod.render(h.cx);
   assert.ok(h.nodes.some(n => n.id === "full-composer"));
+  openFullOptions(h);
   h.nodes.filter(n => n.id === "full-toggle-comments").at(-1).events.on_click(null, h.cx);
   const before = h.state.panelCalls; h.mod.render(h.cx);
   assert.equal(h.state.panelCalls - before, 3);
@@ -1016,6 +1121,7 @@ test("full review defaults to Branch and restores global preferences in a fresh 
   assert.equal(h.requests[0].scope.comparison.mode, "branch");
   h.mod.changeComparison("branch", "origin/custom-base", h.cx); await h.drain();
   h.mod.render(h.cx);
+  openFullOptions(h);
   for (const id of ["full-unified", "full-toggle-files", "full-toggle-comments", "full-unread"]) {
     h.nodes.filter(n => n.id === id).at(-1).events.on_click(null, h.cx);
   }
@@ -1060,6 +1166,7 @@ test("syntax toggles persist and colored rows keep the deferred renderer handler
   h.state.diffList.render(1);
   assert.ok(h.nodes.slice(start).every(n => Object.keys(n.events).length === 0));
   assert.equal(h.mod.syntax, true);
+  openFullOptions(h);
   h.nodes.filter(n => n.id === "full-syntax").at(-1).events.on_click(null, h.cx);
   assert.equal(h.mod.syntax, false); assert.equal(h.mod.syntaxCache, null);
   const next = harness(); next.state.shared = JSON.parse(JSON.stringify(h.state.shared));
@@ -1274,6 +1381,7 @@ for (const full of [false, true]) test(`${full ? "full" : "sidebar"} ordering mo
     ? { source: { providerID: "fixture", id: "chat-model", variant: "medium" }, models: [{ name: "Review model", model }] }
     : { files: ["b.rs", "a.rs"], revision: request.revision } }) });
   h.mod.render(h.cx);
+  if (full) openFullOptions(h);
   h.nodes.find(node => node.id === (full ? "full-order-logically-model" : "order-logically-model")).events.on_click({}, h.cx);
   await h.drain(); h.nodes.length = 0; h.mod.render(h.cx);
   assert.equal(h.requests.at(-1).op, "order_models");
@@ -1331,6 +1439,7 @@ for (const full of [false, true]) test(`${full ? "full" : "sidebar"} runner swit
   h.mod.init({}, h.cx); await h.drain();
   h.mod.data.snapshot.files.push({ path: "b.rs", status: "M", rows: [] });
   h.mod.render(h.cx);
+  if (full) openFullOptions(h);
   const id = full ? "full-order-logically-runner" : "order-logically-runner";
   assert.equal(h.mod.orderRunner(), "opencode");
   h.nodes.find(node => node.id === id).events.on_click({}, h.cx);
@@ -1405,7 +1514,7 @@ test("sidebar full-review button focuses its existing live review without replac
   assert.equal(h.mod.editor.value(), "Keep my source draft");
 });
 
-for (const full of [false, true]) test(`${full ? "full" : "sidebar"} Cmd/Ctrl Enter sends the review only when no comment is unfinished`, async () => {
+for (const full of [false, true]) test(`${full ? "full" : "sidebar"} Cmd/Ctrl Enter saves, opens confirmation, then sends on the next press`, async () => {
   const h = harness(); h.state.props = full ? { presentation: "full" } : {};
   h.mod.init({}, h.cx); await h.drain();
   h.mod.editor.set_value("Save this comment first"); h.mod.editor.focus();
@@ -1416,18 +1525,26 @@ for (const full of [false, true]) test(`${full ? "full" : "sidebar"} Cmd/Ctrl En
   assert.equal(h.requests.filter(request => request.op === "send").length, 0);
   h.mod.handleKey(chord, h.cx); h.mod.editor.emit("submit", { secondary: true });
   await h.drain();
+  assert.equal(h.requests.filter(request => request.op === "send").length, 0);
+  assert.equal(h.mod.reviewSendOpen, true);
+  assert.equal(h.state.focusedInput, h.mod.reviewNote.editor);
+  h.mod.handleKey(chord, h.cx); h.mod.reviewNote.editor.emit("submit", { secondary: true }); await h.drain();
   assert.equal(h.requests.filter(request => request.op === "send").length, 1);
 });
 
-test("Cmd/Ctrl Enter sends outside an empty composer and includes general notes", async () => {
+test("Cmd/Ctrl Enter opens confirmation outside an empty composer and includes general notes", async () => {
   const h = harness(); h.mod.init({}, h.cx); await h.drain();
   h.mod.reviewNote.editor.set_value("Overall direction");
   h.mod.handleKey({ key: "enter", keystroke: "ctrl-enter", modifiers: { control: true } }, h.cx);
   await h.drain();
+  assert.equal(h.mod.reviewSendOpen, true);
+  assert.equal(h.requests.some(request => request.op === "send"), false);
+  h.mod.reviewNote.editor.emit("submit", { secondary: true }); await h.drain();
   assert.equal(h.requests.at(-1).op, "send");
   assert.equal(h.requests.at(-1).note, "Overall direction");
   const noteOnly = harness(); noteOnly.mod.init({}, noteOnly.cx); await noteOnly.drain();
   noteOnly.mod.data.comments = []; noteOnly.mod.reviewNote.editor.set_value("Note-only review");
+  noteOnly.mod.beginReviewSend(noteOnly.cx);
   noteOnly.mod.reviewNote.editor.emit("submit", { secondary: true }); await noteOnly.drain();
   assert.equal(noteOnly.requests.at(-1).op, "send");
   assert.equal(noteOnly.requests.at(-1).note, "Note-only review");
@@ -1473,6 +1590,9 @@ test("saving a full-view comment keeps the empty native composer mounted for the
   assert.equal(h.requests.filter(request => request.op === "send").length, 0);
   h.mod.editor.emit("submit", { secondary: true });
   await h.drain();
+  assert.equal(h.requests.filter(request => request.op === "send").length, 0);
+  assert.equal(h.mod.reviewSendOpen, true);
+  h.mod.reviewNote.editor.emit("submit", { secondary: true }); await h.drain();
   assert.equal(h.requests.filter(request => request.op === "send").length, 1);
 });
 
@@ -1512,6 +1632,8 @@ test("keyboard review delivery accepts working but not blocked or unreported sou
     h.state.agents[0].status = status;
     h.mod.handleKey({ key: "enter", keystroke: "cmd-enter", modifiers: { platform: true } }, h.cx);
     await h.drain();
+    assert.equal(h.mod.reviewSendOpen, status === "working");
+    h.mod.reviewNote.editor.emit("submit", { secondary: true }); await h.drain();
     assert.equal(h.requests.some(request => request.op === "send"), status === "working", String(status));
   }
 });

@@ -314,7 +314,7 @@ export function snapshotFailure(error, machine) {
 }
 
 export function needsFreshSnapshot(id) {
-  return /^(?:save-note|full-save|send-review|full-send|export-review|full-export)$/.test(id)
+  return /^(?:save-note|full-save|send-review|full-send|review-send-confirm|export-review|full-export)$/.test(id)
     || /^(?:resolve-|read-|requeue-|confirm-requeue-|fix-|reply-thread-|post-reply-|retry-reply-|edit-|delete-|confirm-delete-|save-edit-|ask-|full-ask-|question-send$|question-retry$)/.test(id);
 }
 

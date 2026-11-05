@@ -31,6 +31,7 @@ export default class Annotator extends View {
     this.edits = new Map(); this.questions = new Map();
     this.navigationDrafts = new Map(); this.navigationFiles = new Map();
     this.reviewNotes = new Map();
+    this.reviewSend = null; this.reviewOptionsOpen = false; this.fileActionsOpen = false;
     this.githubDrafts = new Map();
     this.full = props()?.presentation === "full"; this.onlyUnread = false;
     const preferences = this.fullSettings();
@@ -301,6 +302,7 @@ export default class Annotator extends View {
 
   fileNote(cx) {
     if (this.editDraft || this.questionDraft) return;
+    this.reviewSend = null;
     this.draft.anchor(null, this.data?.snapshot.revision);
     this.activeComment = null; this.activeCommentIds = null; this.editor.focus(); cx.notify();
   }
@@ -421,6 +423,7 @@ export default class Annotator extends View {
   beginEdit(comment, cx) {
     if (this.busy || this.snapshotError || contextKey() !== this.context || comment.delivery || comment.resolved) return;
     if (this.hasDraft()) { this.notice = "Save or cancel your draft before editing a comment."; cx.notify(); return; }
+    this.reviewSend = null;
     const editor = TextareaState.new({ value: comment.body, rows: 3 });
     editor.set_value(comment.body); editor.on("change", (_event, cx) => { this.publishUpdateState(); cx.notify(); });
     editor.on("submit", (event, cx) => { if (event.secondary && !event.shift) this.saveEdit(cx); });
@@ -440,6 +443,7 @@ export default class Annotator extends View {
     if (this.hasDraft()) { this.notice = "Save or cancel your draft before asking a question."; cx.notify(); return; }
     const file = this.data.snapshot.files.find(f => f.path === this.open);
     if (!file?.loaded || file.truncated) { this.notice = "Load a complete preview before asking about this diff."; cx.notify(); return; }
+    this.reviewSend = null;
     const editor = TextareaState.new({ placeholder: "What do you want to ask about this code?", rows: 3 });
     editor.on("change", (_event, cx) => { this.publishUpdateState(); cx.notify(); });
     editor.on("submit", (event, cx) => { if (event.secondary && !event.shift) this.sendQuestion(cx); });
@@ -498,7 +502,7 @@ export default class Annotator extends View {
 
   handleCommand(command, cx) {
     if (command === "focus") this.focusReview();
-    else if (command === "submit") this.sendToSession(cx);
+    else if (command === "submit") this.reviewSendOpen ? this.confirmReviewSend(cx) : this.beginReviewSend(cx);
     else if (command === "ask") this.beginQuestion(this.selection ? { kind: "selection", selection: selectionPayload(this.selection) } : { kind: "file" }, cx);
     else if (command === "scope") {
       const modes = ["uncommitted", "last_commit", "branch"];
@@ -535,7 +539,11 @@ export default class Annotator extends View {
       if (this.reviewShortcut(cx)) cx.stop_propagation();
       return;
     }
-    if (event.key === "escape") { this.requeue = null; this.exportText = null; this.orderModelOpen = false; cx.notify(); }
+    if (event.key === "escape") {
+      if (this.reviewSendOpen) this.cancelReviewSend(cx);
+      this.requeue = null; this.exportText = null; this.orderModelOpen = false;
+      this.reviewOptionsOpen = false; this.fileActionsOpen = false; this.scopeMenuOpen = false; cx.notify();
+    }
   }
 
   focusReview() {
@@ -553,7 +561,8 @@ export default class Annotator extends View {
       this.saveComment(cx); return true;
     }
     if (this.hasReviewDrafts()) return false;
-    this.sendToSession(cx); return true;
+    if (this.reviewSendOpen) this.confirmReviewSend(cx); else this.beginReviewSend(cx);
+    return true;
   }
 
   prepareSyntax(snapshot) {
@@ -638,6 +647,7 @@ export default class Annotator extends View {
       this.snapshotRequest = null; this.busy = false;
     }
     if (next !== this.context) {
+      this.reviewSend = null; this.reviewOptionsOpen = false; this.fileActionsOpen = false;
       const draft = this.draft.enter(next, this.context, { open: this.open, mode: this.mode, base: this.base, baseExplicit: this.baseExplicit, contextLines: this.contextLines }, this.data?.snapshot.revision);
       this.context = next; this.data = null; this.open = draft?.open ?? props()?.file ?? null;
       const preferences = this.fullSettings(), scope = location().scope;
@@ -674,6 +684,7 @@ export default class Annotator extends View {
         if (this.snapshotRequest !== token || contextKey() !== context) return;
         const previousRevision = this.data?.snapshot.revision;
         if (this.data && this.data.snapshot.branch !== data.snapshot.branch) {
+          this.reviewSend = null;
           this.githubRefresh.invalidate();
         }
         this.data = data;
@@ -712,6 +723,7 @@ export default class Annotator extends View {
     const editToken = op === "edit" ? this.editDraft : null;
     const editKey = this.navigationKey();
     const noteToken = ["send", "export"].includes(op) ? this.reviewNote : null;
+    const sendToken = op === "send" && details.include_local ? this.reviewSend : null;
     if (op === "export") details = { note: noteToken.editor.value(), ...details };
     this.busy = true; this.error = null; this.notice = null;
     cx.spawn(async cx => {
@@ -720,6 +732,7 @@ export default class Annotator extends View {
         if (op === "send" && details.note && noteToken.editor.value() === details.note) {
           noteToken.editor.set_value(""); noteToken.uncertain = false;
         }
+        if (sendToken && this.reviewSend === sendToken) this.reviewSend = null;
         if (editToken) {
           if (editToken.editor.value() === details.body) this.edits.delete(editKey);
           else editToken.expected_body = details.body.trim();
@@ -767,6 +780,48 @@ export default class Annotator extends View {
     return target;
   }
 
+  get reviewSendOpen() {
+    return Boolean(this.reviewSend && this.reviewSend.comparison === this.comparisonKey()
+      && this.reviewSend.branch === this.data?.snapshot.branch && contextKey() === this.context);
+  }
+
+  beginReviewSend(cx) {
+    if (this.busy || this.snapshotError || !this.data || contextKey() !== this.context || this.hasReviewDrafts()) return;
+    const target = this.currentSession();
+    if (!reviewTargetReady(target)) { this.notice = deliveryBlocker(target, false); cx.notify(); return; }
+    this.reviewSend = { comparison: this.comparisonKey(), branch: this.data.snapshot.branch, target: target.address };
+    this.notice = null; this.composerOpen = false;
+    this.reviewOptionsOpen = false; this.fileActionsOpen = false; this.scopeMenuOpen = false; this.orderModelOpen = false; this.baseOpen = false;
+    this.reviewNote.editor.focus(); cx.notify();
+  }
+
+  cancelReviewSend(cx) {
+    if (this.busy) return;
+    this.reviewSend = null; this.focusReview(); cx.notify();
+  }
+
+  confirmReviewSend(cx) {
+    if (!this.reviewSendOpen || this.busy) return;
+    if (this.currentSession()?.address !== this.reviewSend.target) {
+      this.notice = "Source chat changed. Cancel and reopen Review & send."; cx.notify(); return;
+    }
+    this.sendToSession(cx);
+  }
+
+  reviewSendComposer() {
+    const t = theme(), target = this.currentSession(), sameTarget = target?.address === this.reviewSend?.target;
+    const count = pendingComments(this.data?.comments ?? []).length + this.threadQueue.size;
+    const blocked = !sameTarget ? "Source chat changed. Cancel and reopen Review & send." : deliveryBlocker(target, this.hasReviewDrafts(), this.reviewNote.uncertain);
+    return v_flex().id("review-send-composer").flex_none().px(12).py(8).gap(6).bg(t.surface).border_t(1).border_color(t.border)
+      .child(h_flex().gap(6).items_center()
+        .child(div().flex_1().min_w(0).truncate().font_semibold().child(`${count} review items → ${this.reviewSend?.target}`))
+        .child(this.button("review-send-cancel", "Cancel", cx => this.cancelReviewSend(cx))))
+      .child(this.reviewNoteComposer())
+      .when(Boolean(blocked && !this.reviewNote.uncertain), el => el.child(div().text_size(11).text_color(t.ansi3).child(blocked)))
+      .child(h_flex().justify_end().child(this.button("review-send-confirm", this.busy ? "Sending…" : "Send review", cx => this.confirmReviewSend(cx),
+        !blocked && !this.snapshotError && (count > 0 || Boolean(this.reviewNote.editor.value().trim())), "primary").tooltip(blocked ?? "Send review · ⌘Enter / Ctrl+Enter")));
+  }
+
   sendToSession(cx, thread = null) {
     if (this.busy || this.snapshotError || !this.data || contextKey() !== this.context || this.hasReviewDrafts()) return;
     const threads = thread ? [{ id: thread.id, fingerprint: thread.fingerprint }] : [...this.threadQueue.values()];
@@ -792,7 +847,7 @@ export default class Annotator extends View {
     editor.on("blur", () => { this.reviewNoteFocused = false; });
     editor.on("change", (_event, cx) => { this.publishUpdateState(); cx.notify(); });
     editor.on("submit", (event, cx) => {
-      if (event.secondary && !event.shift && !event.is_held && !event.alt) this.reviewShortcut(cx, false);
+      if (event.secondary && !event.shift && !event.is_held && !event.alt && this.reviewSendOpen) this.reviewShortcut(cx, false);
     });
     return { editor, uncertain: false };
   }
@@ -821,6 +876,7 @@ export default class Annotator extends View {
 
   changeComparison(mode, base, cx, explicit = undefined) {
     if (this.busy) return;
+    this.reviewSend = null;
     this.stashNavigationDraft();
     this.baseExplicit = explicit ?? (base !== this.base ? Boolean(base) : this.baseExplicit);
     this.mode = mode; this.base = base; this.baseOpen = false; this.scopeMenuOpen = false; this.selection = null;
@@ -1000,6 +1056,7 @@ export default class Annotator extends View {
 
   selectFile(path, cx) {
     if (this.busy) return;
+    this.reviewSend = null;
     this.focusReview();
     if (path === this.open) {
       this.view = "diff";
@@ -1013,6 +1070,7 @@ export default class Annotator extends View {
 
   selectLine(row, event, cx) {
     if (this.busy || this.editDraft || this.questionDraft) return;
+    this.reviewSend = null;
     this.draft.anchor(selectionFor(this.selection, row, event?.modifiers?.shift), this.data?.snapshot.revision);
     this.activeComment = null; this.activeCommentIds = null; this.composerOpen = true;
     this.exportText = null; this.notice = null; this.editor.focus(); cx.notify();
@@ -1157,7 +1215,7 @@ export default class Annotator extends View {
     const stats = file ? fileStats(file) : null;
     const chat = target?.program?.name ?? (target?.app === "opencode" ? "OpenCode" : target?.app) ?? "Agent";
     const batchSize = pending.length + this.threadQueue.size + (this.reviewNote.editor.value().trim() ? 1 : 0);
-    const sendLabel = batchSize ? `Send review · ${batchSize}` : "Send review";
+    const sendLabel = batchSize ? `Review & send… · ${batchSize}` : "Review & send…";
     return v_flex().id("annotator-root").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13).track_focus(this.handle)
       .on_key_down((event, cx) => this.handleKey(event, cx))
       .child(v_flex().flex_none().bg(t.chrome).px(10).py(6)
@@ -1236,7 +1294,7 @@ export default class Annotator extends View {
         .when(Boolean(this.github?.error), el => el.child(div().p(10).text_color(t.ansi3).child(this.github.error)))
         .when(Boolean(this.github?.limited), el => el.child(div().p(10).text_color(t.ansi3).child("GitHub thread limit reached; more threads exist on the PR.")))
         .children(unreadItems(threads, this.onlyUnread).map(thread => this.githubCard(thread, t)))))))
-        .child(resizable_panel().size(this.sizes[2]).size_range(110).visible(!this.editDraft && !this.questionDraft).child(v_flex().size_full().min_h(0).overflow_y_scrollbar().child(v_flex().mx(8).mt(6).mb(8).p(9).gap(6).rounded(8).bg(t.surface).border_1().border_color(selection ? t.accent : t.border)
+        .child(resizable_panel().size(this.sizes[2]).size_range(110).visible(!this.editDraft && !this.questionDraft && !this.reviewSendOpen).child(v_flex().size_full().min_h(0).overflow_y_scrollbar().child(v_flex().mx(8).mt(6).mb(8).p(9).gap(6).rounded(8).bg(t.surface).border_1().border_color(selection ? t.accent : t.border)
         .child(h_flex().items_center().gap(5)
           .child(div().flex_1().min_w(0).truncate().font_semibold().text_size(11.5).text_color(selection ? t.accent : t.foreground)
             .child(selection ? `Comment on ${selection.side === "old" ? "old " : ""}L${selection.start}${selection.end === selection.start ? "" : `–${selection.end}`}` : "Comment on this file"))
@@ -1254,8 +1312,8 @@ export default class Annotator extends View {
       .when(Boolean(this.exportText), el => el.child(v_flex().mx(8).mb(8).p(8).gap(4).rounded(7).bg(t.surface).border_1().border_color(t.border).flex_none()
         .child(div().text_size(11).text_color(t.muted).child("Review text · select and copy"))
         .child(Textarea.new(this.output).h(95).w_full()).child(this.button("close-export", "Close", cx => { this.exportText = null; cx.notify(); }))))
-      .child(v_flex().flex_none().p(10).gap(6).bg(t.chrome).border_t(1).border_color(t.border)
-        .child(this.reviewNoteComposer())
+      .when(this.reviewSendOpen, el => el.child(this.reviewSendComposer()))
+      .when(!this.reviewSendOpen, el => el.child(v_flex().flex_none().p(8).gap(4).bg(t.chrome).border_t(1).border_color(t.border)
         .child(h_flex().gap(7).items_center()
           .child(h_flex().size(27).rounded(7).bg(t.accent + "18").text_color(t.accent).items_center().justify_center().font_semibold().child("↗"))
           .child(v_flex().flex_1().min_w(0).gap(1)
@@ -1263,8 +1321,8 @@ export default class Annotator extends View {
             .child(div().text_size(10.5).text_color(t.dim).child(`${pending.length} comments · ${this.threadQueue.size} GitHub threads ready`)))
           .when(Boolean(target), el => el.child(this.badge(target.status === "idle" ? "Ready" : target.status === "blocked" ? "Needs you" : "Working", target.status === "idle" ? t.ansi2 : t.ansi3)))
           .child(this.button("export-review", "Export…", cx => this.act("export", { threads: [...this.threadQueue.values()] }, cx), batchSize > 0)))
-        .child(this.button("send-review", sendLabel, cx => this.sendToSession(cx), batchSize > 0 && reviewTargetReady(target) && !reviewDrafts && !this.reviewNote.uncertain, "primary").w_full().h(33).tooltip(sendBlocked ?? "Send review · ⌘Enter / Ctrl+Enter when no comments are unfinished"))
+        .child(this.button("send-review", sendLabel, cx => this.beginReviewSend(cx), reviewTargetReady(target) && !reviewDrafts, "primary").w_full().h(29).tooltip(sendBlocked ?? "Add an optional general note, then send · ⌘Enter / Ctrl+Enter"))
         .when(Boolean(this.snapshotError || this.reviewNote.uncertain || (target && !reviewTargetReady(target))), el => el
-          .child(div().text_size(10.5).text_color(t.ansi3).child(this.snapshotError ? "Refresh failed. Review actions paused." : deliveryBlocker(target, false, this.reviewNote.uncertain)))));
+          .child(div().text_size(10.5).text_color(t.ansi3).child(this.snapshotError ? "Refresh failed. Review actions paused." : deliveryBlocker(target, false, this.reviewNote.uncertain))))));
   }
 }
