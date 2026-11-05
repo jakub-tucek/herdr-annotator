@@ -64,7 +64,10 @@ function harness() {
     shared: key => state.shared[key] ?? null, setShared: (key, value) => { state.saved = { key, value }; state.shared[key] = value; },
     layout: () => state.layout,
     machines: () => state.machines,
-    appHome: () => "/app-home", watchFolder: async () => { throw new Error("Native file events unavailable in unit harness"); },
+    appHome: () => "/app-home", watchFolder: async () => {
+      if (state.watchEvents?.length) return state.watchEvents.shift();
+      throw new Error("Native file events unavailable in unit harness");
+    },
     v_virtual_list: (id, count, size, key, render) => {
       const result = node().id(id);
       state.virtual = { id, count, size, key, render };
@@ -114,6 +117,44 @@ function openFullOptions(h) {
   h.nodes.find(node => node.id === "full-review-options").events.on_click({}, h.cx);
   h.nodes.length = 0; h.mod.render(h.cx);
 }
+
+test("sidebar watcher ignores unrelated writes and batches relevant bursts", async () => {
+  const h = harness();
+  h.state.watchEvents = [
+    ["/app-home/data/cache.json"], ["/app-home/shared.json.tmp.42.1"],
+    ...Array.from({ length: 100 }, () => ["/app-home/view.json"]),
+    ["/app-home/shared.json"], ["/app-home/layouts/.state/task-groups.json"],
+  ];
+  let syncs = 0;
+  h.mod.syncSidebar = () => { syncs++; };
+  h.mod.init({}, h.cx); await h.drain();
+  assert.equal(syncs, 0);
+  assert.equal(h.state.timers?.length ?? 0, 1);
+  h.state.timers[0].fire();
+  assert.equal(syncs, 1);
+  h.mod.queueSidebarSync(["/app-home/view.json"], h.cx);
+  assert.equal(h.state.timers.length, 2);
+  h.state.timers[1].fire();
+  assert.equal(syncs, 2);
+});
+
+test("unrelated watcher events never schedule sidebar work", async () => {
+  const h = harness();
+  h.state.watchEvents = [["/app-home/mods/annotator/main.js"], ["/app-home/window.json"]];
+  h.mod.init({}, h.cx); await h.drain();
+  assert.equal(h.state.timers?.length ?? 0, 0);
+});
+
+test("closing cancels pending sidebar work", async () => {
+  const h = harness();
+  h.state.watchEvents = [["/app-home"]];
+  let syncs = 0;
+  h.mod.syncSidebar = () => { syncs++; };
+  h.mod.init({}, h.cx); await h.drain();
+  assert.equal(h.state.timers?.length ?? 0, 1);
+  h.mod.close(); h.state.timers[0].fire();
+  assert.equal(syncs, 0);
+});
 
 test("saving sends the reviewed source anchor and keeps text on stale-code refusal", async () => {
   const h = harness(); h.mod.init({}, h.cx); await h.drain();

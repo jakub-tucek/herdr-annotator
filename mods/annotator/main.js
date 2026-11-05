@@ -80,7 +80,7 @@ export default class Annotator extends View {
     // polling focus or keeping a redraw timer alive.
     cx.spawn(async cx => {
       try {
-        for (;;) { await watchFolder(appHome()); this.syncSidebar(); cx.notify(); }
+        for (;;) { this.queueSidebarSync(await watchFolder(appHome()), cx); }
       } catch (e) { this.sidebarWatchError = String(e); }
     });
   }
@@ -131,7 +131,7 @@ export default class Annotator extends View {
     this.updates.publish(blocked);
   }
 
-  close() { this.closed = true; this.copyTimer?.cancel(); this.updates?.close(Boolean(this._busy || this.ordering)); }
+  close() { this.closed = true; this.copyTimer?.cancel(); this.sidebarTimer?.cancel(); this.updates?.close(Boolean(this._busy || this.ordering)); }
 
   orderEntry(snapshot = this.data?.snapshot) {
     return (shared("annotator.fileOrders") ?? []).find(entry => entry.key === reviewOrderKey(snapshot));
@@ -938,6 +938,23 @@ export default class Annotator extends View {
         run("pane.focus", { pane });
       } catch (e) { this.error = String(e); }
       finally { this.openingFull = false; cx.notify(); }
+    });
+  }
+
+  queueSidebarSync(paths, cx) {
+    const root = appHome().replace(/\\/g, "/").replace(/\/$/, "");
+    const relevant = paths.some(path => {
+      const normalized = path.replace(/\\/g, "/").replace(/\/$/, "");
+      return normalized === root || normalized === `${root}/view.json`
+        || normalized === `${root}/shared.json` || normalized.startsWith(`${root}/layouts/`);
+    });
+    if (this.closed || this.sidebarTimer || !relevant) return;
+    // Fixed window: coalesce bursts without starving focus restoration while
+    // writes continue. syncSidebar only publishes an actual state transition;
+    // no unconditional notify (which would repaint the entire window).
+    this.sidebarTimer = cx.timer.after(100, () => {
+      this.sidebarTimer = null;
+      if (!this.closed) this.syncSidebar();
     });
   }
 
