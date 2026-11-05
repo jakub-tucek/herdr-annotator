@@ -70,6 +70,9 @@ preserving draft text. Legacy saves without reviewed context still require the
 original revision. Sending retains its revision guard.
 List all changed files, loading only selected/annotated diffs. Branch scope includes
 committed and uncommitted work since merge-base; never fetch refs automatically.
+Use content-checked raw/numstat metadata for the file list. Read-only Git queries
+must not list stat-only M entries when worktree edits cancel a branch change.
+Keep mode-only, binary, empty-file and submodule changes without refreshing the index.
 Unchanged lines accept annotations; collapsing the preview preserves their anchors.
 
 GitHub threads poll every five minutes; Refresh fetches immediately. Show replies,

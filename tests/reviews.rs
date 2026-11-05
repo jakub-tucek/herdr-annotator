@@ -72,6 +72,82 @@ impl Fixture {
 }
 
 #[test]
+fn branch_file_list_omits_changes_cancelled_by_worktree_edits_without_refreshing_index() {
+    let f = Fixture::new(true);
+    git(&f.repo, &["branch", "develop"]);
+    f.change();
+    git(&f.repo, &["add", "."]);
+    git(&f.repo, &["commit", "-m", "branch change"]);
+    // Working tree reverses the branch change, but differs from the index.
+    fs::write(f.repo.join("file.txt"), "one\ntwo\nthree\n").unwrap();
+    fs::write(f.repo.join("real-change.txt"), "keep this file visible\n").unwrap();
+    let index = f.repo.join(".git/index");
+    let before = fs::read(&index).unwrap();
+    let snapshot = f
+        .branch_request(
+            json!({"op":"snapshot","view":{"file":"file.txt"}}),
+            "develop",
+        )
+        .unwrap();
+    let files = snapshot["snapshot"]["files"].as_array().unwrap();
+    assert!(
+        !files.iter().any(|file| file["path"] == "file.txt"),
+        "{snapshot}"
+    );
+    assert!(files.iter().any(|file| file["path"] == "real-change.txt"));
+    assert_eq!(fs::read(&index).unwrap(), before);
+    // The same path really does differ from HEAD in Uncommitted mode.
+    let snapshot = f
+        .request(json!({"op":"snapshot","view":{"file":"file.txt"}}))
+        .unwrap();
+    let file = snapshot["snapshot"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|file| file["path"] == "file.txt")
+        .unwrap();
+    assert!(!file["rows"].as_array().unwrap().is_empty());
+    assert_eq!(fs::read(index).unwrap(), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn mode_only_changes_remain_visible_in_read_only_file_listing() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new(true);
+    fs::set_permissions(f.repo.join("file.txt"), fs::Permissions::from_mode(0o755)).unwrap();
+    let snapshot = f.snapshot();
+    assert_eq!(snapshot["snapshot"]["files"][0]["path"], "file.txt");
+    assert_eq!(snapshot["snapshot"]["files"][0]["loaded"], true);
+}
+
+#[test]
+fn content_checked_listing_preserves_binary_changes_and_literal_tab_newline_paths() {
+    let f = Fixture::new(true);
+    let path = "tab\tname\n[notes].txt";
+    fs::write(f.repo.join(path), "before\n").unwrap();
+    fs::write(f.repo.join("binary.dat"), b"before\0binary").unwrap();
+    git(&f.repo, &["add", "."]);
+    git(&f.repo, &["commit", "-m", "add tracked fixtures"]);
+    fs::write(f.repo.join(path), "after\n").unwrap();
+    fs::write(f.repo.join("binary.dat"), b"after\0binary").unwrap();
+    let snapshot = f
+        .request(json!({"op":"snapshot","view":{"file":path}}))
+        .unwrap();
+    let files = snapshot["snapshot"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2, "{snapshot}");
+    let file = files.iter().find(|f| f["path"] == path).unwrap();
+    assert!(
+        file["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["text"] == "after")
+    );
+    assert!(files.iter().any(|f| f["path"] == "binary.dat"));
+}
+
+#[test]
 fn general_note_exports_alone_or_after_comments_and_validates_size() {
     let f = Fixture::new(true);
     let s = f.snapshot();

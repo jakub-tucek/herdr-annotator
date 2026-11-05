@@ -53,6 +53,8 @@ pub(crate) fn git(scope: &Scope, args: &[&str]) -> Result<Output> {
         ])
         .args(args);
     let metadata = args.contains(&"--name-status")
+        || args.contains(&"--raw")
+        || args.contains(&"--numstat")
         || args.first() == Some(&"status")
         || args.first() == Some(&"for-each-ref");
     let out = process::run(
@@ -243,7 +245,8 @@ pub fn snapshot(scope: &Scope, view: &ViewSpec) -> Result<Snapshot> {
             &scope,
             &[
                 "diff",
-                "--name-status",
+                "--raw",
+                "--numstat",
                 "-z",
                 "--no-renames",
                 "--no-ext-diff",
@@ -252,11 +255,7 @@ pub fn snapshot(scope: &Scope, view: &ViewSpec) -> Result<Snapshot> {
                 "--",
             ],
         )?;
-        let mut records = changed.split('\0').filter(|s| !s.is_empty());
-        while let Some(status) = records.next() {
-            let path = records.next().ok_or("Invalid Git name/status output")?;
-            entries.insert(path.to_owned(), status.to_owned());
-        }
+        entries.extend(changed_entries(&changed)?);
     }
     for entry in status.split('\0').filter(|s| !s.is_empty()) {
         if entry.len() < 4 || !entry.is_char_boundary(3) {
@@ -308,6 +307,39 @@ pub fn snapshot(scope: &Scope, view: &ViewSpec) -> Result<Snapshot> {
     }
     seal(&mut snapshot)?;
     Ok(snapshot)
+}
+
+fn changed_entries(output: &str) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut raw = std::collections::BTreeMap::new();
+    let mut content_changes = std::collections::HashSet::new();
+    let mut records = output.split_terminator('\0');
+    while let Some(record) = records.next() {
+        if let Some(metadata) = record.strip_prefix(':') {
+            let fields: Vec<_> = metadata.split_ascii_whitespace().collect();
+            if fields.len() != 5 {
+                return Err("Invalid Git raw diff output".into());
+            }
+            let path = records.next().ok_or("Missing Git raw diff path")?;
+            let structural = fields[0] != fields[1] || fields[4] != "M" || fields[0] == "160000";
+            raw.insert(path.to_owned(), (fields[4].to_owned(), structural));
+        } else {
+            let path = record
+                .splitn(3, '\t')
+                .nth(2)
+                .ok_or("Invalid Git numstat output")?;
+            content_changes.insert(path.to_owned());
+        }
+    }
+    // Without index refresh, raw/name-status can report M solely from stat/index
+    // differences even when content equals the comparison base. Numstat computes
+    // the actual content diff without updating the index. Keep mode-only changes
+    // and submodules too, even when no line counts are emitted.
+    Ok(raw
+        .into_iter()
+        .filter_map(|(path, (status, structural))| {
+            (structural || content_changes.contains(&path)).then_some((path, status))
+        })
+        .collect())
 }
 
 pub(crate) fn hydrate(snapshot: &mut Snapshot, paths: &[String]) -> Result<()> {
