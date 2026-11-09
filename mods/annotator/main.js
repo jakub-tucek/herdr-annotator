@@ -1,5 +1,5 @@
 import { View, div } from "gpui-kit";
-import { v_flex, h_flex, v_resizable, resizable_panel, v_virtual_list, Scrollbar, TextareaState, Textarea, TextView, InputState, Input } from "gpui-base";
+import { v_flex, h_flex, v_resizable, resizable_panel, v_virtual_list, Scrollbar, TextareaState, Textarea, TextView, InputState, Input, Select, Popup } from "gpui-base";
 import { spaces, panes, focused, agents, exec, home, props, theme, settings, shared, setShared, run, layout, appHome, watchFolder, machines, nextCommand } from "herdr";
 import { selectionFor, selectionPayload, selected, inlineAt, pendingComments, sessionTarget, fileStats, pathParts, commentStatus, commentLocation, reviewSummary, sendHint, unreadItems, visibleComments, layoutSidebar, reviewSidebarTransition, fullPreferences, snapshotFailure, needsFreshSnapshot, savedBaseChoice } from "./review.js";
 import { renderFull } from "./full.js";
@@ -64,6 +64,7 @@ export default class Annotator extends View {
     this.blankReviewNote = this.createReviewNote();
     this.ensureReviewNote(contextKey());
     this.handle = cx.focus_handle();
+    this.scopeTriggerFocus = cx.focus_handle(); this.scopeListFocus = cx.focus_handle();
     this.updates = new UpdateController({ exec, shared, setShared, storage: sessionStorage,
       script: `${home()}/.local/share/herdr-annotator/update.py`, appHome: appHome(),
       ready: cx => { if (!this.closed && !this.data && !this._busy) this.refresh(cx); } });
@@ -332,8 +333,71 @@ export default class Annotator extends View {
 
   baseLabel() { return this.baseExplicit ? this.base ?? "Base…" : this.base ? `Auto: ${this.base}` : "Auto"; }
 
+  comparisonSelect(prefix, snapshot) {
+    const t = theme();
+    const options = [
+        ["uncommitted", prefix === "full" ? "local" : "uncommitted", "Uncommitted", "Staged, unstaged and new files"],
+        ["last_commit", "last-commit", "Last commit", "Latest commit plus uncommitted changes"],
+        ["branch", "branch", "Branch", "Changes since the base branch, plus uncommitted changes"],
+    ];
+    const enabled = index => !this.busy && (options[index][0] !== "last_commit" || !snapshot || Boolean(snapshot.head));
+    const setOpen = (open, cx) => {
+      this.scopeMenuOpen = open;
+      if (open) {
+        this.scopeHighlight = Math.max(0, options.findIndex(([mode]) => mode === this.mode));
+        this.baseOpen = false; this.reviewOptionsOpen = false; this.scopeListFocus.focus();
+      } else this.scopeTriggerFocus.focus();
+      cx.notify();
+    };
+    const choose = (index, cx) => {
+      if (!enabled(index)) return;
+      const mode = options[index][0];
+      setOpen(false, cx);
+      if (mode !== this.mode) this.changeComparison(mode, mode === "branch" ? this.base : null, cx);
+    };
+    const trigger = h_flex().id(`${prefix}-scope-select-trigger`).h(29).w(148).px(9).gap(8).items_center().rounded(6)
+      .bg(t.surface).border_1().border_color(this.scopeMenuOpen ? t.accent : t.border).text_size(12)
+      .child(div().flex_1().child(options.find(([mode]) => mode === this.mode)?.[2] ?? "Compare"))
+      .child(div().text_color(t.dim).child("▾"))
+      .when(!this.busy, el => el.cursor_pointer().hover(s => s.bg(t.hover)).on_click((_event, cx) => {
+        cx.stop_propagation(); setOpen(!this.scopeMenuOpen, cx);
+      }));
+    const menu = v_flex().id(`${prefix}-scope-list`).w(310).p(4).gap(2).rounded(8).bg(t.surface).border_1().border_color(t.border)
+      .role("list_box").accessibility_label("Comparison scope").track_focus(this.scopeListFocus)
+      .on_key_down((event, cx) => {
+        const key = event.key?.toLowerCase();
+        if (!["up", "down", "arrowup", "arrowdown", "home", "end"].includes(key)) return;
+        cx.stop_propagation();
+        let index = this.scopeHighlight ?? 0;
+        const step = key === "up" || key === "arrowup" || key === "end" ? -1 : 1;
+        if (key === "home") index = -1;
+        if (key === "end") index = options.length;
+        for (let n = 0; n < options.length; n++) {
+          index = (index + step + options.length) % options.length;
+          if (enabled(index)) break;
+        }
+        this.scopeHighlight = index; cx.notify();
+      })
+      .children(options.map(([mode, id, label, help], index) => v_flex()
+        .id(`${prefix === "full" ? "full-" : ""}scope-${id}`).px(9).py(7).gap(3).rounded(5)
+        .role("list_box_option").aria_selected(this.mode === mode).when(this.scopeHighlight === index, el => el.aria_active_descendant().bg(t.selected))
+        .text_color(enabled(index) ? t.foreground : t.dim)
+        .child(h_flex().gap(8).items_center().text_size(12)
+          .child(div().flex_1().font_semibold().child(label))
+          .child(div().text_color(t.accent).child(this.mode === mode ? "✓" : "")))
+        .child(div().text_size(11).text_color(t.dim).child(help))
+        .when(enabled(index), el => el.cursor_pointer().hover(s => s.bg(t.hover)).on_click((_event, cx) => { cx.stop_propagation(); choose(index, cx); }))));
+    return Select.new(`${prefix}-scope-select`).accessibility_label("Comparison scope").open(this.scopeMenuOpen)
+      .track_focus(this.scopeTriggerFocus).content_focus_handle(this.scopeListFocus)
+      .on_open_change((open, cx) => setOpen(open && !this.busy, cx))
+      .on_confirm((_event, cx) => choose(this.scopeHighlight ?? 0, cx))
+      .child(Popup.new(`${prefix}-scope-popup`, trigger).anchor("top_right")
+        .when(this.scopeMenuOpen, el => el.content(menu)));
+  }
+
   openBasePicker(cx) {
     this.baseOpen = !this.baseOpen; this.scopeMenuOpen = false;
+    this.reviewOptionsOpen = false;
     if (this.baseOpen) { this.baseEditor.set_value(this.base ?? ""); this.baseEditor.focus(); }
     cx.notify();
   }
@@ -344,12 +408,15 @@ export default class Annotator extends View {
   }
 
   basePicker() {
-    return v_flex().id("review-bases").max_h(210).flex_none().bg(theme().chrome)
+    return v_flex().id("review-bases").mx(8).my(6).p(8).gap(5).max_h(250).flex_none().rounded(8).bg(theme().surface).border_1().border_color(theme().border)
+      .child(h_flex().items_center().gap(6)
+        .child(div().flex_1().font_semibold().text_size(12).child("Compare against base branch"))
+        .child(this.button("base-close", "Done", cx => { this.baseOpen = false; cx.notify(); })))
       .child(h_flex().px(8).py(5).gap(5)
         .child(Input.new(this.baseEditor).id("base-ref-input").flex_1().min_w(0).h(30).px(8).rounded(5).bg(theme().background).border_1().border_color(theme().border))
         .child(this.button("base-apply", "Compare", cx => this.applyBase(cx), Boolean(this.baseEditor.value().trim()))))
       .child(v_flex().max_h(140).overflow_y_scrollbar()
-        .child(this.button("base-auto", "Auto · closest develop base", cx => this.changeComparison("branch", null, cx, false)))
+        .child(this.button("base-auto", "Auto · choose closest branch point", cx => this.changeComparison("branch", null, cx, false)))
         .children(this.bases.map(base => this.button(`base-${base}`, base, cx => this.changeComparison("branch", base, cx, true)))));
   }
 
@@ -531,6 +598,12 @@ export default class Annotator extends View {
   }
 
   handleKey(event, cx) {
+    if (["cmd-c", "ctrl-c"].includes(event.keystroke) && !event.modifiers?.shift && !event.modifiers?.alt
+      && this.handle.is_focused() && this.selection) {
+      const file = this.data?.snapshot.files.find(file => file.path === this.open);
+      if (file) { this.copyText(copiedSelection(file, this.selection), cx); cx.stop_propagation(); }
+      return;
+    }
     const chord = ["cmd-enter", "ctrl-enter", "cmd-return", "ctrl-return"].includes(event.keystroke);
     if (chord && !event.is_held && !event.modifiers?.shift && !event.modifiers?.alt) {
       // Textareas own their submit events. Handling the same press here too
@@ -579,13 +652,24 @@ export default class Annotator extends View {
   }
 
   codeText(row, side, t, highlights) {
+    if (row.kind === "hunk" || row.kind === "meta") return div().flex_1().min_w(0).child(row.text);
     const source = side ?? (row.new != null ? "new" : "old");
     const tokens = this.syntax ? highlights?.get(`${source}:${row[source]}`) : null;
-    if (!tokens?.some(token => token.kind !== "plain")) return div().flex_1().min_w(0).child(row.text || " ");
     const colors = { keyword: t.ansi5, string: t.ansi2, comment: t.muted,
       number: t.ansi3, literal: t.ansi3, function: t.ansi4, type: t.ansi6, property: t.ansi4, plain: t.foreground };
-    return h_flex().flex_1().min_w(0).flex_wrap().items_start().gap(0)
-      .children(tokens.map(token => div().max_w("100%").text_color(colors[token.kind] ?? t.foreground).child(token.text)));
+    // Entity-encode whitespace before HTML minification. Literal spaces/tabs
+    // (even in <pre>) are collapsed by the installed native renderer.
+    const body = escapeText(row.text).replace(/ /g, "&#32;").replace(/\t/g, "&#9;");
+    const id = `code-source-${JSON.stringify([this.open, source, row[source]])}`;
+    const text = TextView.html(id, `<pre>${body}</pre>`).selectable(true).scrollable(false).min_w(0)
+      .font_family(settings().font ?? "JetBrains Mono").text_size(this.full ? 13 : 12);
+    if (!tokens?.some(token => token.kind !== "plain")) return text.flex_1();
+    // Native HTML ignores foreground-color spans. Keep lexical colors in the
+    // painted layer and use one exact-text native surface as its hit target.
+    return div().relative().flex_1().min_w(0)
+      .child(h_flex().w_full().min_w(0).flex_wrap().items_start().gap(0)
+        .children(tokens.map(token => div().max_w("100%").text_color(colors[token.kind] ?? t.foreground).child(token.text))))
+      .child(text.absolute().inset_0().w_full().text_color("#00000000"));
   }
 
   async request(request) {
@@ -758,7 +842,7 @@ export default class Annotator extends View {
         if (op === "send") {
           this.notice = `Feedback submitted to the open session (${details.target}). Sent comments are saved under Show sent/resolved.`;
           if (data.github) this.github = data.github;
-          this.threadQueue.clear();
+          for (const thread of details.threads ?? []) this.threadQueue.delete(thread.id);
           if (agents().some(agent => agent.address === details.target)) run("pane.focus", { terminal: details.target });
         }
       } catch (e) {
@@ -823,7 +907,11 @@ export default class Annotator extends View {
   }
 
   sendToSession(cx, thread = null) {
-    if (this.busy || this.snapshotError || !this.data || contextKey() !== this.context || this.hasReviewDrafts()) return;
+    if (this.busy || this.snapshotError || !this.data || contextKey() !== this.context) return;
+    if (!thread && this.hasReviewDrafts()) {
+      this.notice = "Save or cancel unfinished comments in this comparison before sending the review.";
+      cx.notify(); return;
+    }
     const threads = thread ? [{ id: thread.id, fingerprint: thread.fingerprint }] : [...this.threadQueue.values()];
     const note = thread ? "" : this.reviewNote.editor.value();
     if (!thread && this.reviewNote.uncertain) return;
@@ -1043,7 +1131,7 @@ export default class Annotator extends View {
           else this.threadQueue.set(thread.id, { id: thread.id, fingerprint: thread.fingerprint });
           cx.notify();
         }, enabled, "secondary"))
-        .child(this.button(`fix-${thread.id}`, "Fix thread", cx => this.sendToSession(cx, thread), enabled && !this.editor.value().trim() && reviewTargetReady(this.currentSession()), "primary")))
+        .child(this.button(`fix-${thread.id}`, "Fix thread", cx => this.sendToSession(cx, thread), enabled && reviewTargetReady(this.currentSession()), "primary")))
       .when(Boolean(draft), el => el.child(v_flex().gap(7)
         .child(div().text_size(11).text_color(t.muted).child("Posts as your signed-in GitHub account. Does not send to the agent."))
         .child(div().p(8).rounded(6).bg(t.background).border_1().border_color(t.border)
@@ -1193,7 +1281,11 @@ export default class Annotator extends View {
         .when(row.kind === "delete", el => el.bg(t.ansi1 + "16"))
         .when(active, el => el.bg(t.selected))
         .when(selectable, el => el.cursor_pointer().hover(s => s.bg(t.hover))
-          .on_click((event, cx) => this.selectLine(row, event, cx)))
+          .on_click((event, cx) => {
+            const down = this.codePress, up = this.codeRelease;
+            if (down && up && Math.hypot(up.x - down.x, up.y - down.y) > 3) return;
+            this.selectLine(row, event, cx);
+          }))
         .when(selectable || row.kind === "hunk", el => el.on_mouse_down("right", (_event, cx) => {
           cx.stop_propagation();
           this.beginQuestion(row.kind === "hunk" ? { kind: "hunk", row: i }
@@ -1270,22 +1362,22 @@ export default class Annotator extends View {
         .child(this.button("view-diff", "Code", cx => { this.view = "diff"; cx.notify(); }, true, this.view === "diff" ? "secondary" : "quiet"))
          .child(this.button("view-comments", `Comments · ${summary.total}`, cx => { this.view = "comments"; cx.notify(); }, true, this.view === "comments" ? "secondary" : "quiet"))
           .child(this.button("view-github", `GitHub · ${threads.length}`, cx => { this.view = "github"; this.refreshGithub(cx); cx.notify(); }, true, this.view === "github" ? "secondary" : "quiet"))
-         .when(summary.outdated > 0, el => el.child(this.badge(`${summary.outdated} outdated`, t.ansi3, t.ansi3 + "18"))))
-       .when(this.resolvedCount() > 0 || this.showResolved, el => el.child(h_flex().px(6).flex_none().bg(t.chrome).child(this.resolvedFilter("filter-resolved"))))
-        .when(this.view === "diff", el => el.child(h_flex().px(5).gap(3).flex_none().bg(t.chrome)
+          .when(summary.outdated > 0, el => el.child(this.badge(`${summary.outdated} outdated`, t.ansi3, t.ansi3 + "18")))
+          .child(div().flex_1().min_w(0))
+          .child(this.button("sidebar-options", "⋯", cx => { this.reviewOptionsOpen = !this.reviewOptionsOpen; this.scopeMenuOpen = false; this.baseOpen = false; cx.notify(); }, true, this.reviewOptionsOpen ? "secondary" : "quiet").tooltip("View options")))
+        .when(this.resolvedCount() > 0 || this.showResolved, el => el.child(h_flex().px(6).flex_none().bg(t.chrome).child(this.resolvedFilter("filter-resolved"))))
+         .when(this.reviewOptionsOpen && this.view === "diff", el => el.child(h_flex().id("sidebar-options-panel").mx(6).my(4).p(5).gap(3).flex_wrap().flex_none().rounded(6).bg(t.surface).border_1().border_color(t.border)
           .child(this.orderButton("order-logically"))
           .when(Boolean(this.orderEntry()?.files), el => el.child(this.button("reset-file-order", "Reset order", cx => this.resetOrder(cx))))))
-        .child(h_flex().id("files-scope-row").h(31).flex_none().px(5).gap(3).items_center().bg(t.chrome)
+         .child(h_flex().id("files-scope-row").min_h(35).flex_none().px(5).py(3).gap(3).items_center().bg(t.chrome)
         .when(this.view === "diff", el => el.child(this.button("toggle-files", `${this.filesOpen ? "▾" : "▸"} Files · ${data ? files.length : "—"}`, cx => { this.filesOpen = !this.filesOpen; cx.notify(); })))
         .when(this.view !== "diff", el => el.child(this.button("filter-unread", this.onlyUnread ? "● Unread only" : "All comments", cx => { this.onlyUnread = !this.onlyUnread; cx.notify(); })))
-         .child(div().flex_1().min_w(0))
-        .child(this.button("scope-menu", `${this.mode === "branch" ? "Branch" : this.mode === "last_commit" ? "Last commit" : "Uncommitted"} ▾`, cx => { this.scopeMenuOpen = !this.scopeMenuOpen; this.baseOpen = false; cx.notify(); }, true, "secondary"))
-        .when(this.mode === "branch", el => el.child(this.button("choose-base", `${this.baseLabel()} ▾`, cx => this.openBasePicker(cx))
-          .flex_shrink(1).min_w(0).max_w(145).truncate().tooltip(this.base ?? "Choose base branch"))))
-      .when(this.scopeMenuOpen, el => el.child(h_flex().id("scope-options").px(8).gap(4).bg(t.chrome)
-        .child(this.button("scope-uncommitted", "Uncommitted", cx => this.changeComparison("uncommitted", null, cx), true, this.mode === "uncommitted" ? "secondary" : "quiet"))
-        .child(this.button("scope-last-commit", "Last commit", cx => this.changeComparison("last_commit", null, cx), !data || Boolean(data.snapshot.head), this.mode === "last_commit" ? "secondary" : "quiet"))
-        .child(this.button("scope-branch", "Branch", cx => this.changeComparison("branch", this.base, cx), true, this.mode === "branch" ? "secondary" : "quiet"))))
+           .child(div().flex_1().min_w(0))
+           .child(this.comparisonSelect("sidebar", data?.snapshot)))
+          .when(this.mode === "branch", el => el.child(h_flex().px(8).pb(4).items_center().gap(5).flex_none().bg(t.chrome)
+           .child(div().text_size(11).text_color(t.dim).child("Base"))
+           .child(this.button("choose-base", this.baseLabel(), cx => this.openBasePicker(cx))
+              .flex_shrink(1).min_w(0).truncate().tooltip(this.base ?? "Choose base branch"))))
       .when(this.baseOpen, el => el.child(this.basePicker()))
       .when(this.orderModelOpen, el => el.child(this.orderModelPanel()))
       .child(v_resizable("annotator-sections").flex_1().min_h(0)
@@ -1304,17 +1396,20 @@ export default class Annotator extends View {
             .when(stats?.added > 0, el => el.child(this.badge(`+${stats.added}`, t.ansi2)))
             .when(stats?.removed > 0, el => el.child(this.badge(`−${stats.removed}`, t.ansi1))))
           .when(Boolean(source?.folder), el => el.child(div().text_size(10.5).text_color(t.dim).truncate().child(source.folder)))
-          .child(div().text_size(10.5).text_color(t.dim).child("Click a line to comment · Shift-click for a range"))
           .child(h_flex().gap(4)
             .child(this.button("context-more", "+20 context", cx => this.expandContext(Math.min(1000000, this.contextLines + 20), cx), this.contextLines < 1000000))
             .child(this.button("context-all", "Full context", cx => this.expandContext(1000000, cx), this.contextLines < 1000000))
             .child(this.button("context-reset", "Collapse", cx => this.expandContext(3, cx), this.contextLines > 3)))
-          .child(h_flex().gap(4)
-            .child(this.button("copy-menu", "Copy…", cx => { this.copyMenuOpen = !this.copyMenuOpen; cx.notify(); }))
+           .child(h_flex().gap(4)
+             .when(Boolean(selection), el => el.child(this.button("copy-source-selection", "Copy lines", cx => this.copyText(copiedSelection(file, selection), cx))))
+             .child(this.button("copy-menu", "Copy…", cx => { this.copyMenuOpen = !this.copyMenuOpen; cx.notify(); }))
             .child(this.button("ask-file", "Ask about diff", cx => this.beginQuestion({ kind: "file" }, cx), !hasDraft && file?.loaded && !file?.truncated))
             .when(Boolean(selection), el => el.child(this.button("ask-selection", "Ask about selection", cx => this.beginQuestion({ kind: "selection", selection: selectionPayload(selection) }, cx), !hasDraft))))))
         .when(this.copyMenuOpen, el => el.child(this.copyMenu(file)))
-        .child(v_flex().id("review-diff").flex_1().min_h(0).overflow_y_scrollbar().children([
+        .child(v_flex().id("review-diff").flex_1().min_h(0).overflow_y_scrollbar()
+          .on_mouse_down("left", event => { this.codePress = event.local_position; this.codeRelease = null; })
+          .on_mouse_up("left", event => { this.codeRelease = event.local_position; })
+          .children([
           ...(file?.note ? [div().m(8).p(8).rounded(5).bg(t.raised).text_size(11).text_color(t.muted).child(file.note)] : []),
           ...(file ? this.codeRows(file, comments, t) : [v_flex().p(18).gap(7)
             .child(div().font_semibold().child(this.busy ? "Loading changes…" : this.snapshotError?.title ?? (data ? "No changes to review" : "Select a Git checkout")))

@@ -73,7 +73,7 @@ function harness() {
       state.virtual = { id, count, size, key, render };
       return result;
     },
-    Scrollbar: { vertical: node },
+    Scrollbar: { vertical: node }, Select: { new: id => node().id(id) }, Popup: { new: (id, trigger) => node().id(id).child(trigger) },
     list: (id, count, key, render) => {
       const result = node().id(id);
       // gpui-shell 0.7.1 splices 0..old_count when the native item count changes.
@@ -114,7 +114,7 @@ function harness() {
 }
 
 function openFullOptions(h) {
-  h.nodes.find(node => node.id === "full-review-options").events.on_click({}, h.cx);
+  h.nodes.find(node => node.id === (h.mod.full ? "full-review-options" : "sidebar-options")).events.on_click({}, h.cx);
   h.nodes.length = 0; h.mod.render(h.cx);
 }
 
@@ -412,6 +412,73 @@ test("Copy diff/selection works during refresh without losing source text or dra
   assert.equal(h.mod.selection.side, "old"); assert.equal(h.requests.length, before);
 });
 
+test("plain and highlighted diff source use selectable native text", async () => {
+  const h = harness(); h.mod.init({}, h.cx); await h.drain();
+  const row = { kind: "add", old: null, new: 2, text: '\t  const value = "<img src=x>"; λ & value' };
+  for (const syntax of [false, true]) {
+    h.mod.syntax = syntax; h.nodes.length = 0; h.state.textViews = [];
+    const tokens = new Map([["new:2", [{ kind: "keyword", text: "\t  const" }, { kind: "plain", text: ' value = "<img src=x>"; λ & value' }]]]);
+    h.mod.codeText(row, null, { foreground: "#ffffff", ansi5: "#ff00ff" }, tokens);
+    const view = h.state.textViews.find(v => v.id.startsWith("code-source-"));
+    assert.ok(view, "code must have native text selection, not separate token divs");
+    assert.equal(h.nodes.find(n => n.id === view.id).selectable, true);
+    assert.ok(view.html.includes("&lt;img&#32;src=x&gt;"));
+    assert.ok(!view.html.includes("<img"));
+    const decoded = view.html.replace(/^<pre>|<\/pre>$/g, "").replace(/&#32;/g, " ").replace(/&#9;/g, "\t")
+      .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+    assert.equal(decoded, row.text, "native selection must retain exact source whitespace and Unicode");
+  }
+});
+
+test("Cmd/Ctrl+C copies the selected source range without gutters or diff markers", async () => {
+  const h = harness(); h.mod.init({}, h.cx); await h.drain();
+  h.mod.data.snapshot.files[0].rows = [
+    { kind: "delete", old: 2, new: null, text: "old value" },
+    { kind: "add", old: null, new: 2, text: "\tnew λ & value" },
+    { kind: "context", old: 3, new: 3, text: "  next line" },
+  ];
+  h.mod.selection = { side: "new", start: 2, end: 3 };
+  h.mod.focusReview();
+  const before = h.requests.length;
+  h.mod.handleKey({ key: "c", keystroke: "cmd-c", modifiers: { platform: true } }, h.cx);
+  assert.equal(h.state.clipboard, "\tnew λ & value\n  next line");
+  h.state.clipboard = null;
+  h.mod.handleKey({ key: "c", keystroke: "ctrl-c", modifiers: { control: true } }, h.cx);
+  assert.equal(h.state.clipboard, "\tnew λ & value\n  next line");
+  assert.equal(h.requests.length, before);
+});
+
+test("copy shortcut leaves focused native text and comment editors in control", async () => {
+  const h = harness(); h.mod.init({}, h.cx); await h.drain();
+  h.mod.selection = { side: "new", start: 2, end: 2 };
+  h.mod.editor.focus(); h.mod.editor.set_value("My comment");
+  h.mod.handleKey({ key: "c", keystroke: "cmd-c", modifiers: {} }, h.cx);
+  assert.equal(h.state.clipboard, undefined);
+});
+
+for (const full of [false, true]) test(`${full ? "full" : "sidebar"} exposes a direct Copy lines action for source ranges`, async () => {
+  const h = harness(); h.state.props = full ? { presentation: "full" } : {};
+  h.mod.init({}, h.cx); await h.drain();
+  h.mod.data.snapshot.files[0].rows = [
+    { kind: "delete", old: 2, new: null, text: "\told <value>" },
+    { kind: "add", old: null, new: 2, text: "\tnew λ & value" },
+  ];
+  h.mod.selection = { side: "old", start: 2, end: 2 };
+  h.mod.render(h.cx);
+  h.nodes.find(n => n.id === (full ? "copy-full-source-selection" : "copy-source-selection")).events.on_click({}, h.cx);
+  assert.equal(h.state.clipboard, "\told <value>");
+  assert.equal(h.mod.selection.side, "old");
+});
+
+test("dragging sidebar source text does not start a comment", async () => {
+  const h = harness(); h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
+  const frame = h.nodes.find(n => n.id === "review-diff");
+  frame.events.on_mouse_down({ local_position: { x: 80, y: 30 } });
+  frame.events.on_mouse_up({ local_position: { x: 200, y: 30 } });
+  h.nodes.find(n => n.id === "diff-0").events.on_click({}, h.cx);
+  assert.equal(h.mod.selection, null); assert.equal(h.mod.composerOpen, false);
+});
+
 test("dragging inline comment text does not activate editing or comment actions", async () => {
   const h = harness(); h.state.props = { presentation: "full" };
   h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
@@ -547,7 +614,7 @@ test("Last commit remains selectable when the initial Branch comparison fails", 
     : { code: 0, stdout: JSON.stringify({ ok: true, data: h.snapshot() }) };
   h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
   assert.equal(h.mod.data, null);
-  h.nodes.find(n => n.id === "full-scope-menu").events.on_click({}, h.cx); h.mod.render(h.cx);
+  h.mod.render(h.cx);
   const button = h.nodes.find(n => n.id === "full-scope-last-commit");
   assert.equal(typeof button.events.on_click, "function", "a failed branch load cannot trap the comparison picker");
   button.events.on_click(null, h.cx); await h.drain();
@@ -971,6 +1038,47 @@ test("Fix thread excludes local notes; batches include queued fingerprints", asy
   assert.deepEqual(h.requests.at(-1).threads, [thread]);
 });
 
+for (const full of [false, true]) test(`${full ? "full" : "sidebar"} Fix thread works with an unfinished comment on another file`, async () => {
+  const h = harness(); h.state.props = full ? { presentation: "full" } : {};
+  h.mod.init({}, h.cx); await h.drain();
+  const thread = { id: "thread1", fingerprint: "fp1", path: "a.rs", line: 2, side: "RIGHT", comments: [{ author: "reviewer", body: "Fix this edge case" }] };
+  const key = JSON.stringify([h.mod.comparisonKey(), "other.rs"]);
+  h.mod.navigationDrafts.set(key, { body: "Unfinished local comment" });
+  h.mod.reviewNote.editor.set_value("Unsent general note");
+  h.mod.threadQueue.set("other-thread", { id: "other-thread", fingerprint: "fp2" });
+  h.mod.threadQueue.set(thread.id, { id: thread.id, fingerprint: thread.fingerprint });
+  h.mod.github = { threads: [thread] }; h.mod.view = "github";
+  h.mod.render(h.cx);
+  const fix = h.nodes.find(n => n.id === `fix-${thread.id}`);
+  assert.ok(fix.events.on_click, "Fix thread is presented as enabled");
+  fix.events.on_click({}, h.cx); await h.drain();
+  const sent = h.requests.filter(r => r.op === "send");
+  assert.equal(sent.length, 1, "click must submit the selected thread instead of silently returning");
+  assert.equal(sent[0].include_local, false); assert.equal(sent[0].note, "");
+  assert.deepEqual(sent[0].threads, [{ id: thread.id, fingerprint: thread.fingerprint }]);
+  assert.equal(h.mod.navigationDrafts.get(key).body, "Unfinished local comment");
+  assert.equal(h.mod.reviewNote.editor.value(), "Unsent general note");
+  assert.equal(h.mod.threadQueue.has("other-thread"), true);
+  assert.equal(h.mod.threadQueue.has(thread.id), false);
+});
+
+test("Fix thread preserves the active comment draft; batch send still explains its blocker", async () => {
+  const h = harness(); h.mod.init({}, h.cx); await h.drain();
+  const thread = { id: "thread1", fingerprint: "fp1", path: "a.rs", line: 2, side: "RIGHT", comments: [] };
+  h.mod.editor.set_value("Keep this unfinished comment");
+  h.mod.selection = { side: "new", start: 2, end: 2 };
+  h.mod.github = { threads: [thread] }; h.mod.view = "github";
+  h.mod.render(h.cx);
+  h.nodes.find(n => n.id === `fix-${thread.id}`).events.on_click({}, h.cx); await h.drain();
+  assert.equal(h.requests.filter(r => r.op === "send").length, 1);
+  assert.equal(h.requests.at(-1).include_local, false);
+  assert.equal(h.mod.editor.value(), "Keep this unfinished comment");
+  assert.equal(h.mod.selection.start, 2);
+  h.mod.sendToSession(h.cx); await h.drain();
+  assert.equal(h.requests.filter(r => r.op === "send").length, 1);
+  assert.match(h.mod.notice, /unfinished comments/);
+});
+
 test("GitHub refresh drops changed queued thread versions without sending", async () => {
   const h = harness(); h.mod.init({}, h.cx); await h.drain();
   h.mod.threadQueue.set("t1", { id: "t1", fingerprint: "old" });
@@ -1116,17 +1224,88 @@ test("split rows pair unequal changes and never cross hunks", () => {
   assert.equal(review.splitSelectionRow(split[3], "new").old, null);
 });
 
-test("compact sidebar keeps comparison in the Files row with on-demand options", async () => {
+test("sidebar uses a native comparison select with a floating menu", async () => {
   const h = harness(); h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
   assert.ok(h.nodes.some(n => n.id === "files-scope-row"));
   assert.ok(!h.nodes.some(n => n.id === "scope-options"));
   assert.ok(!h.nodes.some(n => n.children.includes("Working tree")));
-  h.nodes.find(n => n.id === "scope-menu").events.on_click(null, h.cx);
-  h.mod.render(h.cx);
+  assert.ok(h.nodes.some(n => n.id === "sidebar-scope-select"));
+  assert.ok(!h.nodes.some(n => n.id === "scope-menu"));
   h.nodes.filter(n => n.id === "scope-branch").at(-1).events.on_click(null, h.cx);
   await h.drain();
   assert.equal(h.requests.at(-1).scope.comparison.mode, "branch");
   assert.equal(h.mod.scopeMenuOpen, false);
+});
+
+test("sidebar combines Files and comparison and keeps ordering behind Options", async () => {
+  const h = harness(); h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
+  for (const id of ["files-scope-row", "toggle-files", "sidebar-scope-select", "sidebar-options"])
+    assert.ok(h.nodes.some(n => n.id === id), id);
+  for (const id of ["comparison-controls", "sidebar-options-panel", "order-logically"])
+    assert.ok(!h.nodes.some(n => n.id === id), id);
+  assert.ok(!h.nodes.some(n => n.children.includes("Click a line to comment · Shift-click for a range")));
+  const before = h.requests.length;
+  openFullOptions(h);
+  assert.ok(h.nodes.some(n => n.id === "sidebar-options-panel"));
+  assert.ok(h.nodes.some(n => n.id === "order-logically"));
+  assert.equal(h.requests.length, before);
+});
+
+test("full comparison select stays in the header and View options groups settings", async () => {
+  const h = harness(); h.state.props = { presentation: "full" };
+  h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
+  for (const id of ["full-scope-select", "full-scope-local", "full-scope-last-commit", "full-scope-branch"])
+    assert.ok(h.nodes.some(n => n.id === id), id);
+  assert.ok(!h.nodes.some(n => n.id === "full-scope-menu"));
+  const before = h.requests.length;
+  h.nodes.find(n => n.id === "full-review-options").events.on_click(null, h.cx);
+  h.nodes.length = 0; h.mod.render(h.cx);
+  for (const label of ["File order", "Comments", "Code", "Annotator"])
+    assert.ok(h.nodes.some(n => n.children.includes(label)), label);
+  h.nodes.find(n => n.id === "full-options-close").events.on_click(null, h.cx);
+  assert.equal(h.mod.reviewOptionsOpen, false);
+  assert.equal(h.requests.length, before, "opening settings must not refresh or send");
+});
+
+test("base picker and View options are mutually exclusive and closing preserves comparison", async () => {
+  const h = harness(); h.state.props = { presentation: "full" };
+  h.mod.init({}, h.cx); await h.drain();
+  h.mod.reviewOptionsOpen = true;
+  const mode = h.mod.mode, base = h.mod.base, before = h.requests.length;
+  h.mod.openBasePicker(h.cx); h.mod.render(h.cx);
+  assert.equal(h.mod.reviewOptionsOpen, false);
+  assert.ok(h.nodes.some(n => n.id === "review-bases"));
+  h.nodes.find(n => n.id === "base-close").events.on_click(null, h.cx);
+  assert.equal(h.mod.baseOpen, false);
+  assert.equal(h.mod.mode, mode); assert.equal(h.mod.base, base);
+  assert.equal(h.requests.length, before);
+});
+
+test("comparison select supports keyboard navigation, confirmation and dismissal", async () => {
+  const h = harness(); h.state.props = { presentation: "full" };
+  h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
+  h.nodes.find(n => n.id === "full-scope-select-trigger").events.on_click({}, h.cx);
+  assert.equal(h.mod.scopeMenuOpen, true);
+  h.nodes.length = 0; h.mod.render(h.cx);
+  h.nodes.find(n => n.id === "full-scope-list").events.on_key_down({ key: "home" }, h.cx);
+  assert.equal(h.mod.scopeHighlight, 0);
+  h.nodes.find(n => n.id === "full-scope-select").events.on_confirm({}, h.cx);
+  await h.drain();
+  assert.equal(h.mod.mode, "uncommitted"); assert.equal(h.mod.scopeMenuOpen, false);
+  h.nodes.length = 0; h.mod.render(h.cx);
+  const root = h.nodes.find(n => n.id === "full-scope-select"), before = h.requests.length;
+  root.events.on_open_change(true, h.cx);
+  root.events.on_open_change(false, h.cx);
+  assert.equal(h.mod.scopeMenuOpen, false);
+  assert.equal(h.requests.length, before, "dismissal must not change comparison");
+});
+
+test("comparison select skips Last commit when HEAD is missing", async () => {
+  const h = harness(); h.mod.init({}, h.cx); await h.drain();
+  h.mod.data.snapshot.head = null; h.mod.render(h.cx);
+  h.nodes.find(n => n.id === "sidebar-scope-select-trigger").events.on_click({}, h.cx);
+  h.nodes.find(n => n.id === "sidebar-scope-list").events.on_key_down({ key: "down" }, h.cx);
+  assert.equal(h.mod.scopeHighlight, 2);
 });
 
 test("full reader defaults to two columns with inline notes and an on-demand composer", async () => {
@@ -1463,7 +1642,7 @@ for (const full of [false, true]) test(`${full ? "full" : "sidebar"} ordering mo
     ? { source: { providerID: "fixture", id: "chat-model", variant: "medium" }, models: [{ name: "Review model", model }] }
     : { files: ["b.rs", "a.rs"], revision: request.revision } }) });
   h.mod.render(h.cx);
-  if (full) openFullOptions(h);
+  openFullOptions(h);
   h.nodes.find(node => node.id === (full ? "full-order-logically-model" : "order-logically-model")).events.on_click({}, h.cx);
   await h.drain(); h.nodes.length = 0; h.mod.render(h.cx);
   assert.equal(h.requests.at(-1).op, "order_models");
@@ -1521,7 +1700,7 @@ for (const full of [false, true]) test(`${full ? "full" : "sidebar"} runner swit
   h.mod.init({}, h.cx); await h.drain();
   h.mod.data.snapshot.files.push({ path: "b.rs", status: "M", rows: [] });
   h.mod.render(h.cx);
-  if (full) openFullOptions(h);
+  openFullOptions(h);
   const id = full ? "full-order-logically-runner" : "order-logically-runner";
   assert.equal(h.mod.orderRunner(), "opencode");
   h.nodes.find(node => node.id === id).events.on_click({}, h.cx);

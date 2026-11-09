@@ -1,7 +1,7 @@
 import { div, list } from "gpui-kit";
 import { v_flex, h_flex, h_resizable, resizable_panel, v_virtual_list, Scrollbar, Textarea } from "gpui-base";
 import { theme, settings, setShared } from "herdr";
-import { splitRows, splitSelectionRow, selected, pendingComments, unreadItems, visibleComments, fileStats, diffReaderEntries, commentStatus, commentLocation, deliveryBlocker, reviewTargetReady, contextGaps } from "./review.js";
+import { splitRows, splitSelectionRow, selected, pendingComments, unreadItems, visibleComments, fileStats, diffReaderEntries, commentStatus, commentLocation, deliveryBlocker, reviewTargetReady, contextGaps, copiedSelection } from "./review.js";
 
 function pageCards(self, id, items, render) {
   self.cardPages ??= new Map();
@@ -156,7 +156,8 @@ export function renderFull(self, cx) {
         .child(h_flex().id("full-file-toolbar").h(34).px(12).gap(5).items_center()
           .child(self.selectableText("full-file-path", file?.path ?? self.snapshotError?.title ?? (snapshot ? "No changes to review" : "Loading checkout…")).flex_1().min_w(0).truncate().font_semibold())
           .when(Boolean(stats?.added), el => el.child(self.badge(`+${stats.added}`, t.ansi2)))
-          .when(Boolean(stats?.removed), el => el.child(self.badge(`−${stats.removed}`, t.ansi1)))
+           .when(Boolean(stats?.removed), el => el.child(self.badge(`−${stats.removed}`, t.ansi1)))
+           .when(Boolean(selection), el => el.child(self.button("copy-full-source-selection", "Copy lines", cx => self.copyText(copiedSelection(file, selection), cx))))
           .child(self.button("full-prev-file", "‹", cx => self.selectFile(files[fileIndex - 1].path, cx), fileIndex > 0))
           .child(self.button("full-next-file", "›", cx => self.selectFile(files[fileIndex + 1].path, cx), fileIndex >= 0 && fileIndex + 1 < files.length))
           .child(self.button("full-file-actions", "File ▾", cx => { self.fileActionsOpen = !self.fileActionsOpen; cx.notify(); })))
@@ -221,32 +222,38 @@ export function renderFull(self, cx) {
         .child(h_flex().min_w(0).gap(4).text_size(11).text_color(t.dim)
           .child(div().flex_none().child(`${snapshot?.scope.machine ?? "local"} ·`))
           .child(self.selectableText("full-checkout-path", snapshot?.scope.repo ?? "").min_w(0).truncate())))
-      .child(self.button("full-scope-menu", `${self.mode === "branch" ? "Branch" : self.mode === "last_commit" ? "Last commit" : "Uncommitted"} ▾`, cx => { self.scopeMenuOpen = !self.scopeMenuOpen; self.baseOpen = false; cx.notify(); }, true, "secondary"))
-      .when(self.mode === "branch", el => el.child(self.button("full-base", self.baseLabel(), cx => self.openBasePicker(cx)).max_w(150).truncate()))
-      .child(self.button("full-review-options", "Review ▾", cx => { self.reviewOptionsOpen = !self.reviewOptionsOpen; cx.notify(); }))
+      .child(self.comparisonSelect("full", snapshot))
+      .when(self.mode === "branch", el => el.child(self.button("full-base", self.baseLabel(), cx => self.openBasePicker(cx)).max_w(180).truncate().tooltip(self.base ?? "Choose base branch")))
+      .child(self.button("full-review-options", "View options", cx => { self.reviewOptionsOpen = !self.reviewOptionsOpen; self.baseOpen = false; self.scopeMenuOpen = false; cx.notify(); }, true, self.reviewOptionsOpen ? "secondary" : "quiet"))
       .child(self.button("full-refresh", self.busy ? "…" : "↻", cx => { self.refresh(cx, true); self.refreshGithub(cx, true); }).tooltip("Refresh diff and GitHub")))
-    .when(self.scopeMenuOpen, el => el.child(h_flex().id("full-scope-options").px(10).py(4).gap(4).flex_wrap().flex_none().bg(t.chrome)
-      .child(self.button("full-scope-local", "Uncommitted", cx => self.changeComparison("uncommitted", null, cx), true, self.mode === "uncommitted" ? "secondary" : "quiet"))
-      .child(self.button("full-scope-last-commit", "Last commit", cx => self.changeComparison("last_commit", null, cx), !snapshot || Boolean(snapshot.head), self.mode === "last_commit" ? "secondary" : "quiet"))
-      .child(self.button("full-scope-branch", "Branch", cx => self.changeComparison("branch", self.base, cx), true, self.mode === "branch" ? "secondary" : "quiet"))))
     .when(self.baseOpen, el => el.child(self.basePicker()))
     .when(self.orderModelOpen, el => el.child(self.orderModelPanel()))
     .child(self.updatePanel())
     .when(Boolean(self.error), el => el.child(self.errorCard(t)))
     .when(Boolean(self.notice && !self.error), el => el.child(div().px(16).py(8).text_size(12).text_color(t.muted).child(self.notice)))
-    .when(self.reviewOptionsOpen, el => el.child(h_flex().id("full-review-options-panel").px(10).py(4).gap(5).flex_wrap().items_center().flex_none().bg(t.chrome).border_b(1).border_color(t.border)
-      .child(self.orderButton("full-order-logically"))
-      .when(Boolean(self.orderEntry()?.files), el => el.child(self.button("full-reset-file-order", "Reset order", cx => self.resetOrder(cx))))
-       .child(self.button("full-unread", self.onlyUnread ? "● Unread only" : `All comments · ${unread} unread`, cx => { self.onlyUnread = !self.onlyUnread; self.rememberFull({ onlyUnread: self.onlyUnread }); cx.notify(); }, true, "secondary"))
-       .when(self.resolvedCount() > 0 || self.showResolved, el => el.child(self.resolvedFilter("full-resolved")))
-      .child(div().flex_1())
-       .child(self.button("full-toggle-comments", self.commentsOpen ? "Hide comments pane" : "Comments pane", cx => {
-        self.commentsOpen = !self.commentsOpen; self.rememberFull({ commentsOpen: self.commentsOpen }); setShared("annotator.fullComments", self.commentsOpen); cx.notify();
-       }, true, self.commentsOpen ? "secondary" : "quiet"))
-       .child(self.button("full-syntax", self.syntax ? "Syntax" : "Plain", cx => {
-         self.syntax = !self.syntax; self.rememberFull({ syntax: self.syntax }); self.prepareSyntax(self.data?.snapshot); cx.notify();
-       }, true, self.syntax ? "secondary" : "quiet"))
-       .child(self.button("full-updates", "Updates", cx => { self.updates.save({ open: !self.updates.state.open }); self.updates.check(cx); cx.notify(); }))))
+    .when(self.reviewOptionsOpen, el => el.child(v_flex().id("full-review-options-panel").mx(12).my(8).p(10).gap(6).rounded(8).flex_none().bg(t.surface).border_1().border_color(t.border)
+      .child(h_flex().items_center().gap(8)
+        .child(div().flex_1().font_semibold().child("View options"))
+        .child(self.button("full-options-close", "Done", cx => { self.reviewOptionsOpen = false; cx.notify(); })))
+      .child(h_flex().gap(6).flex_wrap().items_center()
+        .child(div().w(80).text_size(11).text_color(t.dim).child("File order"))
+        .child(self.orderButton("full-order-logically"))
+        .when(Boolean(self.orderEntry()?.files), el => el.child(self.button("full-reset-file-order", "Reset order", cx => self.resetOrder(cx)))))
+      .child(h_flex().gap(6).flex_wrap().items_center()
+        .child(div().w(80).text_size(11).text_color(t.dim).child("Comments"))
+        .child(self.button("full-unread", self.onlyUnread ? "● Unread only" : `All comments · ${unread} unread`, cx => { self.onlyUnread = !self.onlyUnread; self.rememberFull({ onlyUnread: self.onlyUnread }); cx.notify(); }, true, "secondary"))
+        .when(self.resolvedCount() > 0 || self.showResolved, el => el.child(self.resolvedFilter("full-resolved")))
+        .child(self.button("full-toggle-comments", self.commentsOpen ? "Hide comments pane" : "Show comments pane", cx => {
+         self.commentsOpen = !self.commentsOpen; self.rememberFull({ commentsOpen: self.commentsOpen }); setShared("annotator.fullComments", self.commentsOpen); cx.notify();
+       }, true, self.commentsOpen ? "secondary" : "quiet")))
+      .child(h_flex().gap(6).flex_wrap().items_center()
+        .child(div().w(80).text_size(11).text_color(t.dim).child("Code"))
+        .child(self.button("full-syntax", self.syntax ? "Syntax" : "Plain", cx => {
+          self.syntax = !self.syntax; self.rememberFull({ syntax: self.syntax }); self.prepareSyntax(self.data?.snapshot); cx.notify();
+        }, true, self.syntax ? "secondary" : "quiet")))
+      .child(h_flex().gap(6).items_center().border_t(1).border_color(t.border).pt(5)
+        .child(div().w(80).text_size(11).text_color(t.dim).child("Annotator"))
+        .child(self.button("full-updates", "Updates", cx => { self.updates.save({ open: !self.updates.state.open }); self.updates.check(cx); cx.notify(); })))))
     .child(h_resizable(self.commentsOpen ? "annotator-reader-with-comments" : "annotator-reader").flex_1().min_h(0)
       .on_resize((sizes, cx) => { self.fullWidths = sizes.slice(0, 2); self.commentWidth = sizes[2] ?? self.commentWidth; setShared("annotator.fullWidths", sizes); cx.notify(); })
       .child(resizable_panel().size(self.fullWidths[0]).size_range(160, 500).visible(self.filesOpen)

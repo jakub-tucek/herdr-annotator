@@ -111,7 +111,7 @@ one first; another tab is never chosen automatically. Each click resolves the
 current chat again. Idle and working sessions can receive reviews. Blocked,
 unknown, and unreported sessions cannot receive them.
 
-In full review, **Review ▾** contains ordering, unread/history filters, syntax,
+In full review, **View options** contains ordering, unread/history filters, syntax,
 the optional comments pane, and updates. **File ▾** contains context expansion,
 file comments, copy, and ask actions. The general-note field stays hidden until
 you open the send composer; the code font size is unchanged.

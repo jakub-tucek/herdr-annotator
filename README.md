@@ -46,6 +46,10 @@ to unique matching context. Outdated notes stay visible but do not enter a send.
 Comment and GitHub reply text supports selection and **⌘C / Ctrl+C**. Use
 **Copy…** for diff previews, selected source lines, paths, or saved comments;
 cards also offer **Copy** and **Copy thread**.
+Diff source text supports native text selection and **⌘C / Ctrl+C** within a
+line. To copy several lines, select a line range and click **Copy lines**.
+The review pane also copies the selected range with **⌘C / Ctrl+C** when it
+has keyboard focus. Copies contain source text, without gutters or diff markers.
 Branch names and full-review checkout/file paths support selection too;
 **Copy… → Copy branch** copies the exact branch name.
 
@@ -65,8 +69,11 @@ according to its own behavior.
 comments, it opens the send composer; press again there to send. One press never
 saves and sends, or opens confirmation and submits it.
 
-Full review keeps code space clear: **Review ▾** holds ordering, filters and view
-settings; **File ▾** holds context expansion, file comments, copy and ask actions.
+The comparison select offers **Uncommitted**, **Last commit**, and **Branch**.
+In full review it sits in the top bar, beside **View options**. In Branch mode,
+the base branch sits beside it (below it in the sidebar).
+**View options** groups file ordering, comment filters and code settings;
+**File ▾** holds context expansion, file comments, copy and ask actions.
 
 After confirmed delivery, sent comments disappear from lists, diffs, and badges.
 **Show sent/resolved** reveals the history. Uncertain delivery stays visible;
@@ -76,7 +83,7 @@ check the chat before an explicit retry.
 
 ## Logical file order
 
-Click **Order logically** in the sidebar or full review to arrange changed files
+Click **Order logically** under **⋯** in the sidebar or **View options** in full review to arrange changed files
 for reading. **Reset order** restores Git order. Click **AI: OpenCode / Pi** to
 switch runners. OpenCode V2 defaults to the source chat's model and reasoning
 variant. Click **Source chat ▾** to choose an ordering-only model or return to
@@ -112,6 +119,8 @@ The **GitHub** tab reads PR review threads and polls for updates. **Fix thread**
 sends one thread to the source agent; **Add to review** queues it with your local
 notes. **Reply** opens a separate composer, and **Post to GitHub** posts as your
 signed-in `gh` account. Sending to the agent does not resolve threads on GitHub.
+**Fix thread** leaves unfinished comments, the general note, and other queued
+threads untouched. Batch sending still requires saving or cancelling comments.
 
 ![GitHub review threads and explicit reply composer](docs/images/github-replies.png)
 
