@@ -935,7 +935,8 @@ if args[0]=='get':
     print(json.dumps({'state':'live','status':{'state':os.environ.get('FAKE_STATUS','idle'),'app':'opencode'},'foreground':{'cwd':os.environ['FAKE_CWD']}})); sys.exit(0)
 if args[0]=='send':
     actual=os.environ.get('FAKE_SEND_STATUS',os.environ.get('FAKE_STATUS','idle'))
-    if args[args.index('--if')+1]!=actual: print('status changed; nothing typed',file=sys.stderr); sys.exit(3)
+    if '--if' in args and args[args.index('--if')+1]!=actual: print('status changed; nothing typed',file=sys.stderr); sys.exit(10)
+    if actual=='blocked' and '--force' not in args: print('blocked; nothing typed',file=sys.stderr); sys.exit(10)
     if os.environ.get('FAKE_FAIL_SEND')=='1': print('disconnected',file=sys.stderr); sys.exit(2)
     print(json.dumps({'turn':1,'started':True})); sys.exit(0)
 sys.exit(2)
@@ -1026,6 +1027,53 @@ fn working_agents_receive_reviews_with_an_exact_working_guard_and_no_force() {
     assert_eq!(sends[0][1], "--if");
     assert_eq!(sends[0][2], "working");
     assert!(!calls.contains("--force"));
+}
+
+#[cfg(unix)]
+#[test]
+fn done_agents_like_claude_code_receive_reviews_and_questions_without_force() {
+    let core = FakeCore::new();
+    let s = core.added();
+    let revision = s["data"]["snapshot"]["revision"].clone();
+    let sent = core.request(
+        json!({"op":"send","target":"testserver/t1","revision":revision}),
+        "done",
+        false,
+    );
+    assert_eq!(sent["ok"], true, "{sent}");
+    assert_eq!(sent["data"]["comments"][0]["delivery"], "sent");
+    let asked = core.request(
+        json!({"op":"ask","target":"testserver/t1","revision":revision,"question_id":"q-done",
+        "path":"file.txt","context":{"kind":"file"},"body":"Explain this"}),
+        "done",
+        false,
+    );
+    assert_eq!(asked["ok"], true, "{asked}");
+    let calls = fs::read_to_string(&core.log).unwrap();
+    let sends: Vec<Value> = calls
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|call: &Value| call[0] == "send")
+        .collect();
+    assert_eq!(sends.len(), 2);
+    assert!(
+        sends.iter().all(|call| call[1] == "testserver/t1"),
+        "done sends carry no --if"
+    );
+    assert!(!calls.contains("--force"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_done_agent_becoming_blocked_is_refused_and_kept_uncertain() {
+    let core = FakeCore::new();
+    let s = core.added();
+    let request =
+        json!({"op":"send","target":"testserver/t1","revision":s["data"]["snapshot"]["revision"]});
+    let refused = core.request_with_send_status(request, "done", "blocked", false);
+    assert_eq!(refused["ok"], false);
+    let loaded = core.request(json!({"op":"snapshot"}), "idle", false);
+    assert_eq!(loaded["data"]["comments"][0]["delivery"], "uncertain");
 }
 
 #[cfg(unix)]

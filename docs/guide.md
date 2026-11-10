@@ -99,7 +99,8 @@ that source binding or enable the full presentation.
    Click **Review & send…**, optionally add a general note, then **Send review**.
    Cancel or Escape keeps the note for later. The confirmation pins the source
    recipient; a changed chat requires cancelling and reopening it.
-   Final Send submits using `hc send --if idle` or `hc send --if working`,
+   Final Send submits using `hc send --if idle` or `hc send --if working`
+   (plain `hc send` for a done agent such as Claude Code, which still refuses blocked),
    including Enter. A working agent may queue or act on the message;
    Annotator does not promise which behavior the agent implements.
    Never submits automatically or uses `--force`. No real agent receives test
@@ -256,7 +257,7 @@ diff side, and source rows. Only **Send question** or the question editor's
 **⌘Enter / Ctrl+Enter** sends; plain Enter stays multiline. Sending does not
 include or mark your saved review comments delivered.
 
-The recipient must be the source chat and idle. A durable receipt records
+The recipient must be the source chat and idle or done. A durable receipt records
 uncertainty before sending. Reopening the same question does not automatically
 retry it. If confirmation is lost, check the chat, then use **I checked chat ·
 Send again** with the original text and recipient. Confirmed identical questions

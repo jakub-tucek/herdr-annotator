@@ -9,7 +9,7 @@ import { GithubRefresh } from "./github-refresh.js";
 import { reviewLocation } from "./review.js";
 import { UpdateController } from "./updates.js";
 import { escapeText, copiedDiff, copiedSelection, contextGaps } from "./review.js";
-import { reviewOrderKey, orderedReviewFiles, existingReviewTab, deliveryBlocker, reviewTargetReady, reviewedDraft } from "./review.js";
+import { reviewOrderKey, orderedReviewFiles, existingReviewTab, deliveryBlocker, reviewTargetReady, reviewedDraft, agentWaiting } from "./review.js";
 
 function location() {
   const fixed = props();
@@ -525,7 +525,7 @@ export default class Annotator extends View {
     const draft = this.questionDraft, target = this.currentSession();
     if (!draft || this.busy || this.snapshotError || !draft.editor.value().trim() || contextKey() !== this.context) return;
     if (draft.status === "uncertain" && !retry) return;
-    if (!target || target.status !== "idle") { draft.error = "Focus the source chat and wait until it is idle."; cx.notify(); return; }
+    if (!agentWaiting(target)) { draft.error = "Focus the source chat and wait until it is idle."; cx.notify(); return; }
     if (retry && (draft.body !== draft.editor.value() || draft.target !== target.address)) {
       draft.error = "Retry must use the original question and recipient. Check the chat first."; cx.notify(); return;
     }
@@ -563,8 +563,8 @@ export default class Annotator extends View {
       .when(draft.status === "uncertain", el => el.child(div().text_size(11).text_color(theme().ansi3).child("Delivery is uncertain. Check the chat before retrying. Do not change the question or recipient.")))
       .child(h_flex().gap(5)
         .child(this.button("question-cancel", "Close", cx => { this.questions.delete(this.navigationKey()); cx.notify(); }))
-        .child(this.button("question-send", "Send question", cx => this.sendQuestion(cx), Boolean(draft.editor.value().trim()) && target?.status === "idle" && draft.status !== "uncertain", "primary"))
-        .when(draft.status === "uncertain", el => el.child(this.button("question-retry", "I checked chat · Send again", cx => this.sendQuestion(cx, true), target?.status === "idle"))));
+        .child(this.button("question-send", "Send question", cx => this.sendQuestion(cx), Boolean(draft.editor.value().trim()) && agentWaiting(target) && draft.status !== "uncertain", "primary"))
+        .when(draft.status === "uncertain", el => el.child(this.button("question-retry", "I checked chat · Send again", cx => this.sendQuestion(cx, true), agentWaiting(target)))));
   }
 
   handleCommand(command, cx) {
@@ -742,7 +742,7 @@ export default class Annotator extends View {
         : { base: propBase ?? null, explicit: props()?.base_explicit ?? Boolean(propBase) };
       this.mode = draft?.mode ?? (this.full ? preferences.mode : props()?.scope?.comparison?.mode ?? "uncommitted");
       this.base = draft?.base ?? choice.base; this.baseExplicit = draft?.baseExplicit ?? choice.explicit;
-      this.contextLines = draft?.contextLines ?? (this.full ? preferences.contextLines : props()?.context_lines ?? 3); this.bases = [];
+      this.contextLines = draft?.contextLines ?? (this.full ? 3 : props()?.context_lines ?? 3); this.bases = [];
       this.exportText = null; this.error = null; this.snapshotError = null; this.showErrorDetails = false; this.notice = null; this.activeComment = this.editDraft?.id ?? null; this.activeCommentIds = null; this.composerOpen = false;
       this.githubRefresh.invalidate();
       this.view = ["comments", "github"].includes(props()?.view) ? props().view : "diff";
@@ -983,7 +983,7 @@ export default class Annotator extends View {
 
   expandContext(lines, cx) {
     if (this.busy) return;
-    this.contextLines = lines; this.rememberFull({ contextLines: lines });
+    this.contextLines = lines;
     if (!this.editor.value().trim()) this.selection = null;
     this.refresh(cx, false, true);
   }
@@ -1166,16 +1166,21 @@ export default class Annotator extends View {
       .when(Boolean(background), el => el.bg(background)).child(text);
   }
 
-  selectFile(path, cx) {
+  // Context expansion belongs to the open file. Each newly opened file starts
+  // collapsed, so one Full context click never inflates every later diff.
+  selectFile(path, cx, context = 3) {
     if (this.busy) return;
     this.reviewSend = null;
     this.focusReview();
     if (path === this.open) {
       this.view = "diff";
-      if (!this.data?.snapshot.files.find(file => file.path === path)?.loaded) this.refresh(cx, false, true);
+      const expand = !this.editor.value().trim() && context > this.contextLines;
+      if (expand) this.contextLines = context;
+      if (expand || !this.data?.snapshot.files.find(file => file.path === path)?.loaded) this.refresh(cx, false, true);
       cx.notify(); return;
     }
     this.stashNavigationDraft(); this.open = path; this.activeComment = null; this.activeCommentIds = null;
+    this.contextLines = context;
     this.notice = this.restoreNavigationDraft() ? "Unfinished comment restored for this file and comparison." : null;
     this.view = "diff"; this.refresh(cx, false, true); cx.notify();
   }
@@ -1198,8 +1203,7 @@ export default class Annotator extends View {
       .when(showFile, el => el.child(h_flex().items_center().gap(4)
         .child(div().flex_1().min_w(0).truncate().text_size(12).font_semibold().child(path.name))
         .child(this.button(`open-note-${comment.id}`, hasDiff ? "View code" : "No diff", cx => {
-          if (!this.busy && !this.editor.value().trim()) this.contextLines = Math.max(this.contextLines, comment.context ?? 3);
-          this.selectFile(comment.path, cx);
+          this.selectFile(comment.path, cx, comment.context ?? 3);
         }, Boolean(hasDiff)))))
       .when(showFile && Boolean(path.folder), el => el.child(div().text_size(10.5).text_color(t.dim).child(path.folder)))
       .child(h_flex().items_center().gap(6)
@@ -1452,7 +1456,7 @@ export default class Annotator extends View {
           .child(v_flex().flex_1().min_w(0).gap(1)
             .child(div().id("review-session").font_semibold().text_size(12).truncate().child(target ? `To ${chat} · ${target.address}` : "No chat selected"))
             .child(div().text_size(10.5).text_color(t.dim).child(`${pending.length} comments · ${this.threadQueue.size} GitHub threads ready`)))
-          .when(Boolean(target), el => el.child(this.badge(target.status === "idle" ? "Ready" : target.status === "blocked" ? "Needs you" : "Working", target.status === "idle" ? t.ansi2 : t.ansi3)))
+          .when(Boolean(target), el => el.child(this.badge(agentWaiting(target) ? "Ready" : target.status === "blocked" ? "Needs you" : "Working", agentWaiting(target) ? t.ansi2 : t.ansi3)))
           .child(this.button("export-review", "Export…", cx => this.act("export", { threads: [...this.threadQueue.values()] }, cx), batchSize > 0)))
         .child(this.button("send-review", sendLabel, cx => this.beginReviewSend(cx), reviewTargetReady(target) && !reviewDrafts, "primary").w_full().h(29).tooltip(sendBlocked ?? "Add an optional general note, then send · ⌘Enter / Ctrl+Enter"))
         .when(Boolean(this.snapshotError || this.reviewNote.uncertain || (target && !reviewTargetReady(target))), el => el

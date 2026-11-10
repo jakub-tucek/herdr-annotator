@@ -103,7 +103,7 @@ pub(crate) fn send(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
         Err(e) => return Err(e.to_string()),
     }
-    git::validate_target(&snapshot.scope, target)?;
+    let status = git::validate_target(&snapshot.scope, target)?;
     let mut receipt = Receipt {
         status: "uncertain".into(),
         error: None,
@@ -112,7 +112,7 @@ pub(crate) fn send(
         &path,
         &serde_json::to_vec(&receipt).map_err(|e| e.to_string())?,
     )?;
-    match git::send(target, text) {
+    match git::send_review(target, text, status) {
         Ok(()) => receipt.status = "confirmed".into(),
         Err(e) => receipt.error = Some(e.chars().take(1000).collect()),
     }

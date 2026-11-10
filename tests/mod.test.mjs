@@ -966,6 +966,22 @@ test("late files and context changes request fresh lazy previews", async () => {
   assert.equal(h.mod.editor.value(), "draft");
 });
 
+test("full review context expansion stays with the open file and is never restored globally", async () => {
+  const h = harness(); h.state.props = { presentation: "full" };
+  h.state.shared["annotator.fullPreferences"] = { contextLines: 1000000 };
+  h.mod.init({}, h.cx); await h.drain();
+  assert.equal(h.mod.contextLines, 3);
+  assert.equal(h.requests.find(r => r.op === "snapshot").view.context, 3);
+  h.mod.expandContext(1000000, h.cx); await h.drain();
+  h.mod.rememberFull({ syntax: true });
+  assert.equal(h.state.shared["annotator.fullPreferences"].contextLines, undefined, "legacy saved depth is dropped on the next write");
+  h.mod.selectFile("other.rs", h.cx); await h.drain();
+  assert.equal(h.mod.contextLines, 3);
+  assert.equal(h.requests.at(-1).view.context, 3);
+  h.mod.selectFile("a.rs", h.cx, 23); await h.drain();
+  assert.equal(h.requests.at(-1).view.context, 23, "View code keeps the depth a note was written at");
+});
+
 for (const full of [false, true]) test(`${full ? "full" : "sidebar"} expands context inline without opening File actions`, async () => {
   const h = harness(); h.state.props = { presentation: full ? "full" : "sidebar" }; h.mod.init({}, h.cx); await h.drain();
   h.mod.data.snapshot.files[0].rows = [
@@ -1394,7 +1410,7 @@ test("full review defaults to Branch and restores global preferences in a fresh 
   next.mod.init({}, next.cx); await next.drain();
   assert.equal(next.requests[0].scope.comparison.mode, "branch");
   assert.equal(next.requests[0].scope.comparison.base, null, "base refs must not leak to another checkout");
-  assert.equal(next.requests[0].view.context, 23);
+  assert.equal(next.requests[0].view.context, 3, "context expansion is per file, not a global preference");
   assert.equal(next.mod.diffStyle, "unified");
   assert.equal(next.mod.filesOpen, false);
   assert.equal(next.mod.commentsOpen, true);
@@ -1412,7 +1428,7 @@ test("full review defaults to Branch and restores global preferences in a fresh 
 
 test("malformed saved preferences use safe defaults", () => {
   const prefs = review.fullPreferences({ mode: "bad", contextLines: -2, filesOpen: "yes", diffStyle: "bad" });
-  assert.equal(prefs.mode, "branch"); assert.equal(prefs.contextLines, 3);
+  assert.equal(prefs.mode, "branch"); assert.equal(prefs.contextLines, undefined);
   assert.equal(prefs.filesOpen, true); assert.equal(prefs.diffStyle, "split");
 });
 

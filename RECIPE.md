@@ -105,7 +105,8 @@ the note. Final Send revalidates the pinned recipient; never redirect an open
 confirmation to a replacement chat. Permit note-only reviews. Navigation closes
 confirmation without losing its note. Disable repeat clicks during delivery.
 Idle and working agents can receive review feedback. Validate the observed
-status, then submit through `hc send --if idle` or `hc send --if working` so
+status, then submit through `hc send --if idle` or `hc send --if working` (a done agent, such as Claude Code
+after a turn, gets plain `hc send`, which still refuses a blocked terminal) so
 core checks it atomically. Never use --force or retry a status race automatically.
 Blocked/unreported terminals cannot receive feedback. Persist uncertain
 delivery before the core call so a crash/reply loss never silently resends.

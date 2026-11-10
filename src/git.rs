@@ -572,10 +572,13 @@ pub fn parse_diff(patch: &str) -> Result<Vec<DiffLine>> {
 pub(crate) enum SendStatus {
     Idle,
     Working,
+    /// Finished a turn and waits for input. Claude Code stays here instead of
+    /// returning to idle.
+    Done,
 }
 
-pub fn validate_target(scope: &Scope, target: &str) -> Result<()> {
-    inspect_target(scope, target, false).map(|_| ())
+pub(crate) fn validate_target(scope: &Scope, target: &str) -> Result<SendStatus> {
+    inspect_target(scope, target, false)
 }
 
 pub(crate) fn validate_review_target(scope: &Scope, target: &str) -> Result<SendStatus> {
@@ -605,12 +608,13 @@ fn inspect_target(scope: &Scope, target: &str, allow_working: bool) -> Result<Se
     let terminal: Value = serde_json::from_str(&out.text).map_err(|e| e.to_string())?;
     let status = match terminal["status"]["state"].as_str() {
         Some("idle") => SendStatus::Idle,
+        Some("done") => SendStatus::Done,
         Some("working") if allow_working => SendStatus::Working,
         _ => {
             return Err(if allow_working {
-                "Target must be an idle or working agent; blocked/unknown states are refused"
+                "Target must be an idle, done or working agent; blocked/unknown states are refused"
             } else {
-                "Target must be an idle agent; blocked/working/unknown states are refused"
+                "Target must be an idle or done agent; blocked/working/unknown states are refused"
             }
             .into());
         }
@@ -636,17 +640,17 @@ fn inspect_target(scope: &Scope, target: &str, allow_working: bool) -> Result<Se
     Ok(status)
 }
 
-pub fn send(target: &str, text: &str) -> Result<()> {
-    send_review(target, text, SendStatus::Idle)
-}
-
 pub(crate) fn send_review(target: &str, text: &str, status: SendStatus) -> Result<()> {
     let mut command = hc();
-    let status = match status {
-        SendStatus::Idle => "idle",
-        SendStatus::Working => "working",
+    command.arg("send");
+    // `--if` accepts only idle or working. A done agent is sent without it:
+    // without `--force`, hc still refuses a terminal that became blocked.
+    match status {
+        SendStatus::Idle => command.args(["--if", "idle"]),
+        SendStatus::Working => command.args(["--if", "working"]),
+        SendStatus::Done => &mut command,
     };
-    command.args(["send", "--if", status, target, text]);
+    command.args([target, text]);
     let out = run(command)?;
     if out.code != 0 {
         return Err("herdr-core refused delivery".into());

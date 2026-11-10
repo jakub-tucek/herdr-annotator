@@ -61,7 +61,7 @@ included in exports. Cancel or Escape closes the composer without discarding it.
 
 **Send review** submits saved comments and queued GitHub threads as one message,
 with file paths and source excerpts. It uses the chat in your source tab and
-accepts an idle or working agent. It never chooses another chat automatically
+accepts an idle, done (Claude Code after a turn) or working agent. It never chooses another chat automatically
 or bypasses permission prompts. A working agent may queue or act on the message
 according to its own behavior.
 
@@ -103,7 +103,7 @@ does not depend on the desktop app inheriting your shell's PATH.
 Right-click a source line or hunk header to ask about it. For a range, select it
 and click **Ask selection**; **Ask about diff** includes the open file's diff.
 Type your question, check the recipient, then **Send question**. Saved review
-comments stay untouched. Questions still require an idle source agent and persist
+comments stay untouched. Questions still require an idle or done source agent and persist
 delivery uncertainty before sending.
 
 <details>

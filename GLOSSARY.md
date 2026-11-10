@@ -12,6 +12,6 @@ Reviewing checkout changes and delivering feedback to the source session.
 
 **Validation snapshot**: Expanded context used to validate saved anchors, distinct from the visible snapshot but sharing its coherent revision safeguard.
 
-**Source session**: The agent session belonging to the originating machine, worktree, and tab. Delivery requires an idle source session.
+**Source session**: The agent session belonging to the originating machine, worktree, and tab. Delivery requires a source session waiting for input (idle, or done as Claude Code reports after a turn); reviews also accept working.
 
 **Uncertain delivery**: Persisted delivery intent without confirmed submission. Never retried automatically.

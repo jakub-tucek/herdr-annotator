@@ -164,14 +164,20 @@ export function sendHint(comments, target, hasDraft) {
   }
   if (!target) return "Focus the agent chat you want to review in this tab.";
   if (target.status === "working") return "Send review while the source is working; the agent may queue or act on the message.";
-  if (target.status !== "idle") return target.status === "blocked"
+  if (!agentWaiting(target)) return target.status === "blocked"
     ? "The chat needs your attention. Answer its prompt before sending."
     : "The chat is busy. Send when its current turn finishes.";
   return "Sends saved comments to this chat and submits with Enter.";
 }
 
+// Waiting for input. Claude Code reports done after a turn and stays there
+// until someone looks, unlike OpenCode, which returns to idle.
+export function agentWaiting(target) {
+  return target?.status === "idle" || target?.status === "done";
+}
+
 export function reviewTargetReady(target) {
-  return target?.status === "idle" || target?.status === "working";
+  return agentWaiting(target) || target?.status === "working";
 }
 
 export function deliveryBlocker(target, hasDraft, uncertain = false) {
@@ -314,7 +320,6 @@ export function fullPreferences(value, legacy = {}) {
     commentsOpen: typeof prefs.commentsOpen === "boolean" ? prefs.commentsOpen : legacy.commentsOpen === true,
     onlyUnread: prefs.onlyUnread === true,
     syntax: prefs.syntax !== false,
-    contextLines: Number.isInteger(prefs.contextLines) && prefs.contextLines >= 0 && prefs.contextLines <= 1000000 ? prefs.contextLines : 3,
   };
 }
 

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { selectionFor, selectionPayload, selected, inlineAt, pendingComments, sessionTarget, fileStats, pathParts, commentStatus, commentLocation, reviewSummary, sendHint, visibleComments, unreadItems, snapshotFailure, diffReaderEntries, splitRows, contextGaps } from "../mods/annotator/review.js";
+import { selectionFor, selectionPayload, selected, inlineAt, pendingComments, sessionTarget, fileStats, pathParts, commentStatus, commentLocation, reviewSummary, sendHint, visibleComments, unreadItems, snapshotFailure, diffReaderEntries, splitRows, contextGaps, reviewTargetReady } from "../mods/annotator/review.js";
 
 test("inline context controls cover leading, middle and trailing gaps without changing rows", () => {
   const rows = [
@@ -143,6 +143,9 @@ test("presentation separates ready, outdated, sent and resolved comments", () =>
   assert.match(sendHint([outdated], { status: "idle" }, false), /outdated.*excluded/);
   assert.match(sendHint([ready], { status: "working" }, false), /Send review while the source is working/);
   assert.match(sendHint([ready], { status: "blocked" }, false), /Answer its prompt/);
+  assert.match(sendHint([ready], { status: "done" }, false), /submits with Enter/, "Claude Code rests in done, not idle");
+  assert.equal(reviewTargetReady({ status: "done" }), true);
+  assert.equal(reviewTargetReady({ status: "blocked" }), false);
   assert.match(sendHint([ready], { status: "idle" }, true), /Save your draft/);
 });
 
