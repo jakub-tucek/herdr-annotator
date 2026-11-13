@@ -1,7 +1,7 @@
 import { div, list } from "gpui-kit";
 import { v_flex, h_flex, h_resizable, resizable_panel, v_virtual_list, Scrollbar, Textarea } from "gpui-base";
 import { theme, settings, setShared } from "herdr";
-import { splitRows, splitSelectionRow, selected, pendingComments, unreadItems, visibleComments, fileStats, diffReaderEntries, commentStatus, commentLocation, deliveryBlocker, reviewTargetReady, contextGaps, copiedSelection } from "./review.js";
+import { splitRows, splitSelectionRow, selected, pendingComments, unreadItems, visibleComments, fileStats, diffReaderEntries, commentStatus, commentLocation, deliveryBlocker, reviewTargetReady, contextGaps, copiedSelection, reviewTotals } from "./review.js";
 
 function pageCards(self, id, items, render) {
   self.cardPages ??= new Map();
@@ -79,7 +79,7 @@ export function renderFull(self, cx) {
   const byKey = new Map(entries.map(entry => [entry.key, entry]));
   const activeComments = fileComments.filter(comment => comment.id === self.activeComment || self.activeCommentIds?.includes(comment.id));
   const highlights = self.syntaxCache?.key === JSON.stringify([snapshot?.revision, file?.path]) ? self.syntaxCache.tokens : null;
-  const stats = file ? fileStats(file) : null;
+  const stats = file ? fileStats(file) : null, totals = snapshot ? reviewTotals(files) : null;
   const hasDraft = self.hasDraft(), hasNoteDraft = Boolean(self.editor.value().trim()), selection = self.selection;
   const reviewDrafts = self.hasReviewDrafts();
   const pending = pendingComments(allComments), batch = pending.length + self.threadQueue.size + (self.reviewNote.editor.value().trim() ? 1 : 0);
@@ -217,6 +217,8 @@ export function renderFull(self, cx) {
     .child(h_flex().id("full-review-header").h(42).flex_none().px(12).gap(6).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .child(div().font_semibold().text_size(14).child("Review"))
       .child(self.badge(`${snapshot ? files.length : "—"} files${self.snapshotError && snapshot ? " · cached" : ""}`, t.muted, t.raised))
+      .when(Boolean(totals?.added), el => el.child(self.badge(`+${totals.added}`, t.ansi2)))
+      .when(Boolean(totals?.removed), el => el.child(self.badge(`−${totals.removed}`, t.ansi1)))
       .child(v_flex().flex_1().min_w(0).gap(2)
         .child(self.selectableText("full-branch-name", snapshot?.branch ?? "Loading checkout…").truncate().font_semibold().text_size(12))
         .child(h_flex().min_w(0).gap(4).text_size(11).text_color(t.dim)

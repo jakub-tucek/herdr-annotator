@@ -246,7 +246,7 @@ pub fn snapshot(scope: &Scope, view: &ViewSpec) -> Result<Snapshot> {
             "--untracked-files=all",
         ],
     )?;
-    let mut entries = std::collections::BTreeMap::<String, String>::new();
+    let mut entries = std::collections::BTreeMap::<String, (String, LineStats)>::new();
     if let Some(base) = baseline.as_deref() {
         let changed = required(
             &scope,
@@ -269,18 +269,31 @@ pub fn snapshot(scope: &Scope, view: &ViewSpec) -> Result<Snapshot> {
             return Err("Invalid Git status record".into());
         }
         if baseline.is_none() || entry.starts_with("?? ") {
-            entries.insert(entry[3..].to_owned(), entry[..2].to_owned());
+            entries.insert(entry[3..].to_owned(), (entry[..2].to_owned(), None));
         }
     }
+    let untracked: Vec<&String> = entries
+        .iter()
+        .filter(|(_, (xy, _))| xy == "??")
+        .map(|(path, _)| path)
+        .collect();
+    let new_lines = if untracked.is_empty() {
+        Default::default()
+    } else {
+        untracked_line_counts(&scope, &untracked)?
+    };
     let limited = false;
     let mut files = Vec::new();
-    for (path, xy) in &entries {
+    for (path, (xy, stats)) in &entries {
         if !safe_path(path) {
             return Err("Git returned an invalid relative path".into());
         }
+        let stats = stats.or_else(|| new_lines.get(path).map(|&n| (n, 0)));
         let file = ChangedFile {
             path: path.to_owned(),
             status: xy.to_owned(),
+            added: stats.map(|s| s.0),
+            removed: stats.map(|s| s.1),
             rows: Vec::new(),
             note: None,
             truncated: false,
@@ -317,9 +330,13 @@ pub fn snapshot(scope: &Scope, view: &ViewSpec) -> Result<Snapshot> {
     Ok(snapshot)
 }
 
-fn changed_entries(output: &str) -> Result<std::collections::BTreeMap<String, String>> {
+type LineStats = Option<(u32, u32)>;
+
+fn changed_entries(
+    output: &str,
+) -> Result<std::collections::BTreeMap<String, (String, LineStats)>> {
     let mut raw = std::collections::BTreeMap::new();
-    let mut content_changes = std::collections::HashSet::new();
+    let mut content_changes = std::collections::HashMap::<String, LineStats>::new();
     let mut records = output.split_terminator('\0');
     while let Some(record) = records.next() {
         if let Some(metadata) = record.strip_prefix(':') {
@@ -331,11 +348,14 @@ fn changed_entries(output: &str) -> Result<std::collections::BTreeMap<String, St
             let structural = fields[0] != fields[1] || fields[4] != "M" || fields[0] == "160000";
             raw.insert(path.to_owned(), (fields[4].to_owned(), structural));
         } else {
-            let path = record
-                .splitn(3, '\t')
-                .nth(2)
-                .ok_or("Invalid Git numstat output")?;
-            content_changes.insert(path.to_owned());
+            let mut fields = record.splitn(3, '\t');
+            let (added, removed) = (fields.next(), fields.next());
+            let path = fields.next().ok_or("Invalid Git numstat output")?;
+            // Binary files report "-" counts.
+            let stats = added
+                .and_then(|a| a.parse().ok())
+                .zip(removed.and_then(|r| r.parse().ok()));
+            content_changes.insert(path.to_owned(), stats);
         }
     }
     // Without index refresh, raw/name-status can report M solely from stat/index
@@ -345,9 +365,35 @@ fn changed_entries(output: &str) -> Result<std::collections::BTreeMap<String, St
     Ok(raw
         .into_iter()
         .filter_map(|(path, (status, structural))| {
-            (structural || content_changes.contains(&path)).then_some((path, status))
+            let stats = content_changes.get(&path).copied();
+            (structural || stats.is_some()).then(|| (path, (status, stats.flatten())))
         })
         .collect())
+}
+
+// Line counts of new untracked files, without reading them into the snapshot or
+// touching the index. Binary and empty files are absent from grep's output.
+fn untracked_line_counts(
+    scope: &Scope,
+    paths: &[&String],
+) -> Result<std::collections::HashMap<String, u32>> {
+    let mut counts = std::collections::HashMap::new();
+    for chunk in paths.chunks(200) {
+        let mut args = vec!["grep", "-z", "-c", "-I", "--untracked", "-e", "", "--"];
+        args.extend(chunk.iter().map(|p| p.as_str()));
+        let out = git(scope, &args)?;
+        if out.truncated {
+            break;
+        }
+        for line in out.text.lines() {
+            if let Some((path, count)) = line.split_once('\0')
+                && let Ok(count) = count.parse()
+            {
+                counts.insert(path.to_owned(), count);
+            }
+        }
+    }
+    Ok(counts)
 }
 
 pub(crate) fn hydrate(snapshot: &mut Snapshot, paths: &[String]) -> Result<()> {

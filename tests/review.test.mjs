@@ -1,6 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { selectionFor, selectionPayload, selected, inlineAt, pendingComments, sessionTarget, fileStats, pathParts, commentStatus, commentLocation, reviewSummary, sendHint, visibleComments, unreadItems, snapshotFailure, diffReaderEntries, splitRows, contextGaps, reviewTargetReady } from "../mods/annotator/review.js";
+import { selectionFor, selectionPayload, selected, inlineAt, pendingComments, sessionTarget, fileStats, pathParts, commentStatus, commentLocation, reviewSummary, sendHint, visibleComments, unreadItems, snapshotFailure, diffReaderEntries, splitRows, contextGaps, reviewTargetReady, reviewTotals } from "../mods/annotator/review.js";
+
+test("review totals use Git's counts and fall back to loaded rows", () => {
+  const files = [
+    { path: "a", added: 10, removed: 2, rows: [] },
+    { path: "b", added: null, removed: null, rows: [{ kind: "add" }, { kind: "delete" }, { kind: "context" }] },
+    { path: "c", added: 5, removed: 0, rows: [{ kind: "add" }] },
+    { path: "draft", rows: [], draftOnly: true },
+  ];
+  assert.deepEqual(fileStats(files[2]), { added: 5, removed: 0 }, "a context-limited preview never undercounts");
+  assert.deepEqual(reviewTotals(files), { added: 16, removed: 3 });
+  assert.deepEqual(reviewTotals([]), { added: 0, removed: 0 });
+});
 
 test("inline context controls cover leading, middle and trailing gaps without changing rows", () => {
   const rows = [

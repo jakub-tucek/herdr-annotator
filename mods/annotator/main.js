@@ -9,7 +9,7 @@ import { GithubRefresh } from "./github-refresh.js";
 import { reviewLocation } from "./review.js";
 import { UpdateController } from "./updates.js";
 import { escapeText, copiedDiff, copiedSelection, contextGaps } from "./review.js";
-import { reviewOrderKey, orderedReviewFiles, existingReviewTab, deliveryBlocker, reviewTargetReady, reviewedDraft, agentWaiting } from "./review.js";
+import { reviewOrderKey, orderedReviewFiles, existingReviewTab, deliveryBlocker, reviewTargetReady, reviewedDraft, agentWaiting, reviewTotals } from "./review.js";
 
 function location() {
   const fixed = props();
@@ -1347,6 +1347,7 @@ export default class Annotator extends View {
     const sendBlocked = deliveryBlocker(target, reviewDrafts, this.reviewNote.uncertain);
     const source = file ? pathParts(file.path) : null;
     const stats = file ? fileStats(file) : null;
+    const totals = data ? reviewTotals(files) : null;
     const chat = target?.program?.name ?? (target?.app === "opencode" ? "OpenCode" : target?.app) ?? "Agent";
     const batchSize = pending.length + this.threadQueue.size + (this.reviewNote.editor.value().trim() ? 1 : 0);
     const sendLabel = batchSize ? `Review & send… · ${batchSize}` : "Review & send…";
@@ -1375,6 +1376,8 @@ export default class Annotator extends View {
           .when(Boolean(this.orderEntry()?.files), el => el.child(this.button("reset-file-order", "Reset order", cx => this.resetOrder(cx))))))
          .child(h_flex().id("files-scope-row").min_h(35).flex_none().px(5).py(3).gap(3).items_center().bg(t.chrome)
         .when(this.view === "diff", el => el.child(this.button("toggle-files", `${this.filesOpen ? "▾" : "▸"} Files · ${data ? files.length : "—"}`, cx => { this.filesOpen = !this.filesOpen; cx.notify(); })))
+        .when(this.view === "diff" && Boolean(totals?.added), el => el.child(this.badge(`+${totals.added}`, t.ansi2)))
+        .when(this.view === "diff" && Boolean(totals?.removed), el => el.child(this.badge(`−${totals.removed}`, t.ansi1)))
         .when(this.view !== "diff", el => el.child(this.button("filter-unread", this.onlyUnread ? "● Unread only" : "All comments", cx => { this.onlyUnread = !this.onlyUnread; cx.notify(); })))
            .child(div().flex_1().min_w(0))
            .child(this.comparisonSelect("sidebar", data?.snapshot)))

@@ -629,6 +629,8 @@ fn file(lines: &[&str], first: u32) -> ChangedFile {
     ChangedFile {
         path: "a".into(),
         status: " M".into(),
+        added: None,
+        removed: None,
         note: None,
         truncated: false,
         loaded: true,
@@ -674,6 +676,45 @@ fn anchors_move_only_to_unique_exact_context() {
             .locate(&file(&["before", "changed", "after"], 1))
             .is_none()
     );
+}
+
+#[test]
+fn file_line_counts_are_known_before_diffs_load() {
+    let f = Fixture::new(true);
+    f.change();
+    fs::write(f.repo.join("new file.txt"), "a\nb\nc\n").unwrap();
+    fs::write(f.repo.join("tail.txt"), "no newline").unwrap();
+    fs::write(f.repo.join("blob.bin"), [0, 1, 2]).unwrap();
+    let s = f
+        .request(json!({"op":"snapshot","view":{"file":"tail.txt"}}))
+        .unwrap();
+    let file = |p: &str| {
+        s["snapshot"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["path"] == p)
+            .unwrap()
+            .clone()
+    };
+    let changed = file("file.txt");
+    assert_eq!(
+        changed["loaded"], false,
+        "counts must not require loading the diff"
+    );
+    assert_eq!(
+        (changed["added"].clone(), changed["removed"].clone()),
+        (json!(1), json!(1))
+    );
+    assert_eq!(
+        (
+            file("new file.txt")["added"].clone(),
+            file("new file.txt")["removed"].clone()
+        ),
+        (json!(3), json!(0))
+    );
+    assert_eq!(file("tail.txt")["added"], 1);
+    assert_eq!(file("blob.bin")["added"], Value::Null);
 }
 
 #[test]

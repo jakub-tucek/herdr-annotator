@@ -293,6 +293,12 @@ impl Snapshot {
 pub struct ChangedFile {
     pub path: String,
     pub status: String,
+    /// Whole-file line counts from Git, known before the diff is loaded.
+    /// None for binary files, submodules and unknown counts.
+    #[serde(default)]
+    pub added: Option<u32>,
+    #[serde(default)]
+    pub removed: Option<u32>,
     pub rows: Vec<DiffLine>,
     pub note: Option<String>,
     pub truncated: bool,

@@ -109,9 +109,18 @@ export function sessionTarget(list, context, focus, remembered = null) {
     ?? (candidates.length === 1 ? candidates[0] : null);
 }
 
+// Git's whole-file counts when known; otherwise the loaded preview rows.
 export function fileStats(file) {
+  if (Number.isInteger(file.added) && Number.isInteger(file.removed)) return { added: file.added, removed: file.removed };
   return { added: file.rows.filter(r => r.kind === "add").length,
     removed: file.rows.filter(r => r.kind === "delete").length };
+}
+
+export function reviewTotals(files) {
+  return files.reduce((total, file) => {
+    const stats = fileStats(file);
+    return { added: total.added + stats.added, removed: total.removed + stats.removed };
+  }, { added: 0, removed: 0 });
 }
 
 // Revision includes the selected preview. Keep reading order across navigation,

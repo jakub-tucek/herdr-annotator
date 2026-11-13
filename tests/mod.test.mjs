@@ -1240,6 +1240,18 @@ test("split rows pair unequal changes and never cross hunks", () => {
   assert.equal(review.splitSelectionRow(split[3], "new").old, null);
 });
 
+for (const full of [false, true]) test(`${full ? "full" : "sidebar"} shows overall added and removed lines`, async () => {
+  const h = harness(); h.state.props = full ? { presentation: "full" } : {};
+  h.mod.init({}, h.cx); await h.drain();
+  h.mod.data.snapshot.files = [
+    { path: "a.rs", status: " M", added: 12, removed: 3, rows: [], loaded: true },
+    { path: "b.rs", status: "??", added: 4, removed: 0, rows: [], loaded: false },
+  ];
+  h.nodes.length = 0; h.mod.render(h.cx);
+  assert.ok(h.nodes.some(n => n.children.includes("+16")), "total added");
+  assert.ok(h.nodes.some(n => n.children.includes("−3")), "total removed");
+});
+
 test("sidebar uses a native comparison select with a floating menu", async () => {
   const h = harness(); h.mod.init({}, h.cx); await h.drain(); h.mod.render(h.cx);
   assert.ok(h.nodes.some(n => n.id === "files-scope-row"));
