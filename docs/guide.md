@@ -221,8 +221,9 @@ per machine/checkout, never copied to an unrelated repository. The compact sideb
 keeps its own comparison state.
 
 **Syntax / Plain** toggles lexical coloring, enabled by default and remembered
-globally. It recognizes JS/TS, Rust, Python, C-like languages, JSON, YAML/TOML,
-shell, SQL, CSS and HTML/XML. Keywords, strings, comments, types, functions and
+globally. It recognizes JS/TS, Rust, Python, Scala, Gradle/Groovy, C-like
+languages, JSON (including Avro schemas), Pegasus PDL, YAML/TOML, shell, SQL,
+CSS, HTML/XML and Markdown structure. Keywords, strings, comments, types, functions and
 numbers use theme colors; diff backgrounds and selection remain unchanged.
 Old/new multiline state is separate and resets at hidden gaps. This is a small
 lexer, not a full language grammar. Unsupported languages and extreme lines
