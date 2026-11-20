@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { syntaxLanguage, syntaxTokens, highlightDiff } from "../mods/annotator/syntax.js";
+import { syntaxLanguage, syntaxTokens, highlightDiff, colorIdentifiers, identifierColor } from "../mods/annotator/syntax.js";
 
 test("lexical colors preserve exact source including indentation, Unicode and markup", () => {
   for (const [path, text] of [
@@ -173,4 +173,44 @@ test("Markdown underscores inside words are not emphasis", () => {
   const tokens = syntaxTokens("call foo__bar__baz now", "markdown");
   assert.ok(tokens.every(t => t.kind === "plain"));
   assert.ok(kinds(syntaxTokens("a __strong__ word", "markdown"), "type").includes("__strong__"));
+});
+
+const rowsOf = lines => lines.map((text, i) => ({ kind: "context", old: i + 1, new: i + 1, text }));
+
+test("semantic colors give each identifier one slot per file in first-appearance order", () => {
+  const rows = rowsOf(["val record = parse(line)", "record.id + count", "  // record in a comment"]);
+  const colored = colorIdentifiers(highlightDiff(rows, "A.scala"), "A.scala");
+  const slots = (key, name) => colored.get(key).filter(t => t.text === name).map(t => [t.kind, t.slot]);
+  assert.deepEqual(slots("new:1", "record"), [["variable", 0]]);
+  assert.deepEqual(slots("new:1", "line"), [["variable", 1]]);
+  assert.deepEqual(slots("new:2", "record"), [["variable", 0]], "same name, same color on later lines");
+  assert.deepEqual(slots("old:2", "record"), [["variable", 0]], "and on the other diff side");
+  assert.deepEqual(slots("new:2", "id"), [["variable", 2]]);
+  assert.deepEqual(slots("new:2", "count"), [["variable", 3]]);
+  assert.ok(colored.get("new:1").some(t => t.kind === "keyword" && t.text === "val"));
+  assert.ok(colored.get("new:1").some(t => t.kind === "function" && t.text === "parse"), "calls keep their color");
+  assert.ok(colored.get("new:3").every(t => t.kind !== "variable"), "comments are untouched");
+  for (const [key, tokens] of colored) assert.equal(tokens.map(t => t.text).join(""), rows[Number(key.split(":")[1]) - 1].text);
+});
+
+test("semantic colors skip prose and data files and never split oversized lines", () => {
+  for (const path of ["README.md", "data.json", "app.yml", "page.html", "site.css"]) {
+    const tokens = highlightDiff(rowsOf(["some words here: value"]), path);
+    const colored = colorIdentifiers(tokens, path);
+    assert.ok([...colored.values()].flat().every(t => t.kind !== "variable"), path);
+  }
+  const busy = Array.from({ length: 150 }, (_, i) => `a${i}`).join(" + ");
+  const tokens = highlightDiff(rowsOf([busy]), "busy.ts");
+  assert.deepEqual(colorIdentifiers(tokens, "busy.ts").get("new:1"), tokens.get("new:1"));
+});
+
+test("identifier palette has twelve distinct readable hues for dark and light themes", () => {
+  for (const dark of [true, false]) {
+    const colors = Array.from({ length: 12 }, (_, slot) => identifierColor(slot, dark));
+    assert.equal(new Set(colors).size, 12);
+    assert.ok(colors.every(c => /^#[0-9a-f]{6}$/.test(c)));
+    assert.equal(identifierColor(12, dark), colors[0], "slots wrap around the palette");
+    const luminance = c => { const n = parseInt(c.slice(1), 16); return 0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255); };
+    assert.ok(colors.every(c => dark ? luminance(c) > 140 : luminance(c) < 120), `${dark ? "dark" : "light"} theme contrast`);
+  }
 });

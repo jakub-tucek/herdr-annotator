@@ -169,6 +169,46 @@ function markdownTokens(text, state) {
   return tokens;
 }
 
+// Semantic mode: plain identifiers get a per-file color slot in order of first
+// appearance, so the same name reads the same everywhere in the diff. Prose and
+// data formats have keys, not variables, and stay as the lexer colored them.
+const SEMANTIC_LANGUAGES = new Set(["js", "rust", "python", "c", "sql", "shell", "scala", "groovy", "pdl"]);
+export function colorIdentifiers(highlights, path) {
+  if (!SEMANTIC_LANGUAGES.has(syntaxLanguage(path))) return highlights;
+  const slots = new Map(), result = new Map();
+  for (const [key, tokens] of highlights) {
+    const split = [];
+    for (const token of tokens) {
+      if (token.kind !== "plain") { split.push(token); continue; }
+      token.text.split(/([A-Za-z_$][\w$]*)/).forEach((text, index) => {
+        if (!text) return;
+        if (index % 2) split.push({ text, kind: "variable" });
+        else if (split.at(-1)?.kind === "plain") split.at(-1).text += text;
+        else split.push({ text, kind: "plain" });
+      });
+    }
+    // Same native text-run bound as the lexer: busy lines keep lexical colors.
+    if (split.length > 200) { result.set(key, tokens); continue; }
+    for (const token of split) if (token.kind === "variable") {
+      if (!slots.has(token.text)) slots.set(token.text, slots.size);
+      token.slot = slots.get(token.text);
+    }
+    result.set(key, split);
+  }
+  return result;
+}
+
+// Twelve hues; stepping 5/12 of the wheel per slot keeps neighbouring slots far
+// apart. Pastel on dark themes, deep on light ones, for contrast either way.
+export function identifierColor(slot, dark) {
+  const hue = ((slot * 5) % 12) * 30 + 15, s = dark ? 0.6 : 0.65, l = dark ? 0.75 : 0.3;
+  const channel = n => {
+    const k = (n + hue / 30) % 12, value = l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(value * 255).toString(16).padStart(2, "0");
+  };
+  return `#${channel(0)}${channel(8)}${channel(4)}`;
+}
+
 // Old/new lexers advance independently: removed delimiters must not color added
 // lines. Hidden gaps reset state rather than inventing the omitted source.
 export function highlightDiff(rows, path) {

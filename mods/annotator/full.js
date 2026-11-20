@@ -284,8 +284,11 @@ export function renderFull(self, cx) {
        }, true, self.commentsOpen ? "secondary" : "quiet")))
       .child(h_flex().gap(6).flex_wrap().items_center()
         .child(div().w(80).text_size(11).text_color(t.dim).child("Code"))
-        .child(self.button("full-syntax", self.syntax ? "Syntax" : "Plain", cx => {
-          self.syntax = !self.syntax; self.rememberFull({ syntax: self.syntax }); self.prepareSyntax(self.data?.snapshot); cx.notify();
+        // Plain -> Syntax -> Semantic (per-name identifier colors) -> Plain.
+        .child(self.button("full-syntax", !self.syntax ? "Plain" : self.semantic ? "Semantic" : "Syntax", cx => {
+          [self.syntax, self.semantic] = !self.syntax ? [true, false] : !self.semantic ? [true, true] : [false, false];
+          self.rememberFull({ syntax: self.syntax, semantic: self.semantic });
+          self.syntaxCache = null; self.prepareSyntax(self.data?.snapshot); cx.notify();
         }, true, self.syntax ? "secondary" : "quiet")))
       .child(h_flex().gap(6).items_center().border_t(1).border_color(t.border).pt(5)
         .child(div().w(80).text_size(11).text_color(t.dim).child("Annotator"))

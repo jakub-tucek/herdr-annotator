@@ -373,6 +373,7 @@ export function fullPreferences(value, legacy = {}) {
     commentsOpen: typeof prefs.commentsOpen === "boolean" ? prefs.commentsOpen : legacy.commentsOpen === true,
     onlyUnread: prefs.onlyUnread === true,
     syntax: prefs.syntax !== false,
+    semantic: prefs.syntax !== false && prefs.semantic === true,
   };
 }
 
