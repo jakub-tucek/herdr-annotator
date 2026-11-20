@@ -7,18 +7,29 @@ const WORDS = {
   c: "abstract auto bool boolean break case catch char class const continue default defer do double else enum export extends final float for func function go if implements import int interface long namespace new package private protected public return short signed sizeof static string struct super switch synchronized template this throw throws trait try typedef typename union unsigned use using var virtual void volatile while",
   sql: "add all alter and as asc begin between by case check column commit constraint create cross database default delete desc distinct drop else end exists false foreign from full group having in index inner insert into is join key left like limit not null offset on or order outer primary references right rollback select set table then true union unique update values view when where with",
   shell: "case do done elif else esac export fi for function if in local readonly return select then time until while",
+  // Scala 2 and 3. Soft keywords that double as common identifiers (end, as, open) are left out.
+  scala: "abstract case catch class def derives do else enum export extends extension final finally for forSome given if implicit import inline lazy match new object opaque override package private protected return sealed super then this throw trait transparent try type using val var while with yield",
+  groovy: "abstract as assert boolean break byte case catch char class const continue def default do double else enum extends final finally float for goto if implements import in instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws trait transient try var void volatile while",
+  // Pegasus schemas: declarations plus primitive and container types.
+  pdl: "namespace package import record enum typeref fixed union map array includes string int long float double boolean bytes",
 };
 const KEYWORDS = Object.fromEntries(Object.entries(WORDS).map(([name, words]) => [name, new Set(words.split(" "))]));
 const LITERALS = new Set("true false null undefined NaN Infinity None True False nil NULL TRUE FALSE".split(" "));
+// Languages whose strings may open with a triple quote and span lines.
+const TRIPLE_QUOTES = { python: `"'`, groovy: `"'`, scala: '"' };
 const TYPES = new Set("u8 u16 u32 u64 u128 usize i8 i16 i32 i64 i128 isize f32 f64 str bool char string number boolean any unknown never object".split(" "));
 
 export function syntaxLanguage(path) {
   const name = path.split("/").pop().toLowerCase(), ext = name.split(".").pop();
+  if (["scala", "sc"].includes(ext)) return "scala";
+  if (["gradle", "groovy", "gvy"].includes(ext) || name === "jenkinsfile") return "groovy";
+  if (["md", "markdown", "mdx"].includes(ext)) return "markdown";
+  if (ext === "pdl") return "pdl";
   if (["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts"].includes(ext)) return "js";
   if (ext === "rs") return "rust";
   if (["py", "pyi"].includes(ext)) return "python";
   if (["c", "h", "cc", "cpp", "hpp", "cs", "java", "go", "swift", "kt", "php"].includes(ext)) return "c";
-  if (["json", "jsonc"].includes(ext)) return "json";
+  if (["json", "jsonc", "avsc", "avpr"].includes(ext)) return "json";
   if (["yaml", "yml", "toml", "ini", "conf"].includes(ext)) return "config";
   if (["sh", "bash", "zsh", "fish"].includes(ext) || name === "dockerfile" || name === "makefile") return "shell";
   if (ext === "sql") return "sql";
@@ -27,9 +38,10 @@ export function syntaxLanguage(path) {
   return null;
 }
 
-function quoteEnd(text, start, quote) {
+// Raw quotes (Scala """) have no escapes: a backslash before the close is literal.
+function quoteEnd(text, start, quote, raw = false) {
   for (let i = start; i < text.length; i++) {
-    if (text[i] === "\\") { i++; continue; }
+    if (!raw && text[i] === "\\") { i++; continue; }
     if (text.startsWith(quote, i)) return i + quote.length;
   }
   return -1;
@@ -37,6 +49,7 @@ function quoteEnd(text, start, quote) {
 
 export function syntaxTokens(text, language, state = {}) {
   if (!language || text.length > 8192) return [{ text, kind: "plain" }];
+  if (language === "markdown") return markdownTokens(text, state);
   const tokens = [];
   const add = (value, kind) => {
     if (!value) return;
@@ -45,7 +58,7 @@ export function syntaxTokens(text, language, state = {}) {
     else tokens.push({ text: value, kind });
   };
   const lineComment = ["python", "config", "shell"].includes(language) ? "#" : language === "sql" ? "--" : language === "html" ? null : "//";
-  const blockStart = language === "html" ? "<!--" : ["js", "rust", "c", "json", "css", "sql"].includes(language) ? "/*" : null;
+  const blockStart = language === "html" ? "<!--" : ["js", "rust", "c", "json", "css", "sql", "scala", "groovy", "pdl"].includes(language) ? "/*" : null;
   const blockEnd = language === "html" ? "-->" : "*/";
   let i = 0, steps = 0;
   while (i < text.length) {
@@ -60,7 +73,7 @@ export function syntaxTokens(text, language, state = {}) {
       state.block = end < 0; continue;
     }
     if (state.quote) {
-      const end = quoteEnd(text, i, state.quote);
+      const end = quoteEnd(text, i, state.quote, language === "scala");
       add(text.slice(i, end < 0 ? text.length : end), "string");
       i = end < 0 ? text.length : end;
       if (end >= 0) state.quote = null;
@@ -75,10 +88,15 @@ export function syntaxTokens(text, language, state = {}) {
     const char = text[i];
     const lifetime = language === "rust" && char === "'" ? /^'[A-Za-z_][A-Za-z0-9_]*(?=[\s,>:;+)=\]\[&]|$)/.exec(text.slice(i))?.[0] : null;
     if (lifetime) { add(lifetime, "type"); i += lifetime.length; continue; }
+    // Scala quotes only close single-character literals; 'name is a symbol.
+    if (language === "scala" && char === "'") {
+      const literal = /^'(?:\\u[\da-fA-F]{4}|\\.|[^'\\])'/.exec(text.slice(i))?.[0];
+      add(literal ?? char, literal ? "string" : "plain"); i += literal?.length ?? 1; continue;
+    }
     if (char === '"' || char === "'" || (char === "`" && language === "js")) {
-      const triple = language === "python" && text.startsWith(char.repeat(3), i);
+      const triple = !!TRIPLE_QUOTES[language]?.includes(char) && text.startsWith(char.repeat(3), i);
       const quote = triple ? char.repeat(3) : char;
-      const end = quoteEnd(text, i + quote.length, quote);
+      const end = quoteEnd(text, i + quote.length, quote, language === "scala" && triple);
       // Rust lifetimes are identifiers, not unterminated character literals.
       if (language === "rust" && char === "'" && end < 0) { add(char, "plain"); i++; continue; }
       const stop = end < 0 ? text.length : end;
@@ -99,16 +117,56 @@ export function syntaxTokens(text, language, state = {}) {
     if (word) {
       const following = text.slice(i + word.length);
       const keyword = language === "sql" ? word.toLowerCase() : word;
-      const kind = LITERALS.has(word) ? "literal" : KEYWORDS[language]?.has(keyword) ? "keyword"
+      // Scala interpolators (s"", f"", raw"") read as part of their string.
+      const kind = language === "scala" && following.startsWith('"') ? "string"
+        : LITERALS.has(word) ? "literal" : KEYWORDS[language]?.has(keyword) ? "keyword"
         : ["json", "config"].includes(language) && /^\s*[:=]/.test(following) ? "property"
-        : /^\s*\(/.test(following) ? "function" : TYPES.has(word) || /^[A-Z]/.test(word) ? "type" : "plain";
+        : language === "pdl" && /^\??\s*:/.test(following) ? "property"
+        : /^\s*\(/.test(following) ? "function"
+        // Gradle DSL calls usually omit parentheses: implementation 'g:a:v', dependencies {
+        : language === "groovy" && /^[a-z]/.test(word) && /^\s*\{|^\s+["']/.test(following) ? "function"
+        : TYPES.has(word) || /^[A-Z]/.test(word) ? "type" : "plain";
       add(word, kind); i += word.length; continue;
     }
-    const number = /^(?:0[xX][\da-fA-F_]+|0[bB][01_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?)/.exec(rest)?.[0];
+    const number = /^(?:0[xX][\da-fA-F_]+|0[bB][01_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?)(?:[lLfFdD](?![\w$]))?/.exec(rest)?.[0];
     if (number) { add(number, "number"); i += number.length; continue; }
     add(char, "plain"); i++;
   }
   return tokens.length > 200 ? [{ text, kind: "plain" }] : tokens;
+}
+
+// Markdown is prose: color structure only, never quotes. Fenced code stays
+// uninterpreted until its closing fence, tracked in state like a block comment.
+const MARKDOWN_INLINE = /(`+)[^`]*?\1|\*\*[^*]+\*\*|(?<![\w])__[^_]+__(?![\w])|(\[[^\]]*\])(\([^)\s]*\))/g;
+function markdownTokens(text, state) {
+  const whole = kind => text ? [{ text, kind }] : [];
+  const fence = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(text);
+  if (state.fence) {
+    const closes = fence && fence[1][0] === state.fence[0] && fence[1].length >= state.fence.length && !fence[2].trim();
+    if (closes) state.fence = null;
+    return whole(closes ? "comment" : "string");
+  }
+  if (fence) { state.fence = fence[1]; return whole("comment"); }
+  if (/^\s{0,3}#{1,6}(?:\s|$)/.test(text)) return whole("keyword");
+  if (/^\s{0,3}>/.test(text)) return whole("comment");
+  const tokens = [];
+  const add = (value, kind) => {
+    if (!value) return;
+    if (tokens.at(-1)?.kind === kind) tokens.at(-1).text += value; else tokens.push({ text: value, kind });
+  };
+  const marker = /^(\s*)([-*+]|\d{1,9}[.)])(?=\s|$)/.exec(text);
+  let i = 0;
+  if (marker) { add(marker[1], "plain"); add(marker[2], "number"); i = marker[0].length; }
+  for (const match of text.matchAll(MARKDOWN_INLINE)) {
+    if (match.index < i) continue;
+    add(text.slice(i, match.index), "plain");
+    if (match[3]) { add(match[2], "function"); add(match[3], "comment"); }
+    else add(match[0], match[1] ? "string" : "type");
+    i = match.index + match[0].length;
+    if (tokens.length > 200) return [{ text, kind: "plain" }];
+  }
+  add(text.slice(i), "plain");
+  return tokens;
 }
 
 // Old/new lexers advance independently: removed delimiters must not color added
