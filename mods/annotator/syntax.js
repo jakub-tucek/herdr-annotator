@@ -38,9 +38,10 @@ export function syntaxLanguage(path) {
   return null;
 }
 
-function quoteEnd(text, start, quote) {
+// Raw quotes (Scala """) have no escapes: a backslash before the close is literal.
+function quoteEnd(text, start, quote, raw = false) {
   for (let i = start; i < text.length; i++) {
-    if (text[i] === "\\") { i++; continue; }
+    if (!raw && text[i] === "\\") { i++; continue; }
     if (text.startsWith(quote, i)) return i + quote.length;
   }
   return -1;
@@ -72,7 +73,7 @@ export function syntaxTokens(text, language, state = {}) {
       state.block = end < 0; continue;
     }
     if (state.quote) {
-      const end = quoteEnd(text, i, state.quote);
+      const end = quoteEnd(text, i, state.quote, language === "scala");
       add(text.slice(i, end < 0 ? text.length : end), "string");
       i = end < 0 ? text.length : end;
       if (end >= 0) state.quote = null;
@@ -95,7 +96,7 @@ export function syntaxTokens(text, language, state = {}) {
     if (char === '"' || char === "'" || (char === "`" && language === "js")) {
       const triple = !!TRIPLE_QUOTES[language]?.includes(char) && text.startsWith(char.repeat(3), i);
       const quote = triple ? char.repeat(3) : char;
-      const end = quoteEnd(text, i + quote.length, quote);
+      const end = quoteEnd(text, i + quote.length, quote, language === "scala" && triple);
       // Rust lifetimes are identifiers, not unterminated character literals.
       if (language === "rust" && char === "'" && end < 0) { add(char, "plain"); i++; continue; }
       const stop = end < 0 ? text.length : end;
@@ -136,7 +137,7 @@ export function syntaxTokens(text, language, state = {}) {
 
 // Markdown is prose: color structure only, never quotes. Fenced code stays
 // uninterpreted until its closing fence, tracked in state like a block comment.
-const MARKDOWN_INLINE = /(`+)[^`]*?\1|\*\*[^*]+\*\*|__[^_]+__|(\[[^\]]*\])(\([^)\s]*\))/g;
+const MARKDOWN_INLINE = /(`+)[^`]*?\1|\*\*[^*]+\*\*|(?<![\w])__[^_]+__(?![\w])|(\[[^\]]*\])(\([^)\s]*\))/g;
 function markdownTokens(text, state) {
   const whole = kind => text ? [{ text, kind }] : [];
   const fence = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(text);

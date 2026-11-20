@@ -158,3 +158,19 @@ test("number suffixes never swallow identifiers", () => {
   assert.ok(syntaxTokens("let x = 1f32;", "rust").every(t => t.text !== "1f"));
   assert.ok(kinds(syntaxTokens("long n = 10L;", "c"), "number").includes("10L"));
 });
+
+test("Scala triple-quoted strings are raw, so a trailing backslash still closes them", () => {
+  const state = {};
+  const tokens = syntaxTokens('val re = """\\d+\\""" // digits', "scala", state);
+  assert.ok(!state.quote);
+  assert.ok(kinds(tokens, "comment").includes("// digits"));
+  syntaxTokens('val sql = """first', "scala", state);
+  syntaxTokens('C:\\dir\\""" + x', "scala", state);
+  assert.equal(state.quote, null);
+});
+
+test("Markdown underscores inside words are not emphasis", () => {
+  const tokens = syntaxTokens("call foo__bar__baz now", "markdown");
+  assert.ok(tokens.every(t => t.kind === "plain"));
+  assert.ok(kinds(syntaxTokens("a __strong__ word", "markdown"), "type").includes("__strong__"));
+});
