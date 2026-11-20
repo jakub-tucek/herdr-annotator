@@ -194,7 +194,8 @@ test("semantic colors give each identifier one slot per file in first-appearance
 });
 
 test("semantic colors skip prose and data files and never split oversized lines", () => {
-  for (const path of ["README.md", "data.json", "app.yml", "page.html", "site.css"]) {
+  // Shell: `foo=1` and `$foo` lex as different words, so one variable would get two colors.
+  for (const path of ["README.md", "data.json", "app.yml", "page.html", "site.css", "run.sh"]) {
     const tokens = highlightDiff(rowsOf(["some words here: value"]), path);
     const colored = colorIdentifiers(tokens, path);
     assert.ok([...colored.values()].flat().every(t => t.kind !== "variable"), path);

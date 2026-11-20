@@ -172,7 +172,8 @@ function markdownTokens(text, state) {
 // Semantic mode: plain identifiers get a per-file color slot in order of first
 // appearance, so the same name reads the same everywhere in the diff. Prose and
 // data formats have keys, not variables, and stay as the lexer colored them.
-const SEMANTIC_LANGUAGES = new Set(["js", "rust", "python", "c", "sql", "shell", "scala", "groovy", "pdl"]);
+// Shell is excluded: `foo=1` and `$foo` lex as different words.
+const SEMANTIC_LANGUAGES = new Set(["js", "rust", "python", "c", "sql", "scala", "groovy", "pdl"]);
 export function colorIdentifiers(highlights, path) {
   if (!SEMANTIC_LANGUAGES.has(syntaxLanguage(path))) return highlights;
   const slots = new Map(), result = new Map();
