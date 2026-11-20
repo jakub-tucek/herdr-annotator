@@ -21,6 +21,7 @@ function harness() {
         if (key === "id") data.id = args[0];
         else if (key === "selectable") data.selectable = args[0];
         else if (key === "opacity") data.opacity = args[0];
+        else if (key === "text_color") data.textColor = args[0];
         else if (key === "transition") data.transition = args;
         else if (key === "h") data.height = args[0];
         else if (key === "child") data.children.push(args[0]);
@@ -1544,12 +1545,39 @@ test("syntax toggles persist and colored rows keep the deferred renderer handler
   assert.ok(h.nodes.slice(start).every(n => Object.keys(n.events).length === 0));
   assert.equal(h.mod.syntax, true);
   openFullOptions(h);
-  h.nodes.filter(n => n.id === "full-syntax").at(-1).events.on_click(null, h.cx);
-  assert.equal(h.mod.syntax, false); assert.equal(h.mod.syntaxCache, null);
+  const click = () => h.nodes.filter(n => n.id === "full-syntax").at(-1).events.on_click(null, h.cx);
+  const label = () => h.nodes.filter(n => n.id === "full-syntax").at(-1);
+  click();
+  assert.equal(h.mod.syntax, true); assert.equal(h.mod.semantic, true, "Syntax cycles to Semantic");
+  assert.ok([...h.mod.syntaxCache.tokens.values()].flat().some(t => t.kind === "variable" && t.text === "value"));
+  h.nodes.length = 0; h.mod.render(h.cx);
+  assert.ok(JSON.stringify(label()).includes("Semantic"));
+  const reloaded = harness(); reloaded.state.shared = JSON.parse(JSON.stringify(h.state.shared));
+  reloaded.state.props = { presentation: "full" };
+  reloaded.mod.init({}, reloaded.cx); await reloaded.drain();
+  assert.equal(reloaded.mod.semantic, true);
+  click();
+  assert.equal(h.mod.syntax, false); assert.equal(h.mod.semantic, false); assert.equal(h.mod.syntaxCache, null);
   const next = harness(); next.state.shared = JSON.parse(JSON.stringify(h.state.shared));
   next.state.props = { presentation: "full" };
   next.mod.init({}, next.cx); await next.drain();
   assert.equal(next.mod.syntax, false);
+  click();
+  assert.equal(h.mod.syntax, true); assert.equal(h.mod.semantic, false, "Plain cycles back to Syntax");
+});
+
+test("semantic variables paint with the generated palette for the theme", async () => {
+  const h = harness(); h.mod.init({}, h.cx); await h.drain();
+  h.mod.syntax = true;
+  const row = { kind: "add", old: null, new: 2, text: "count + other" };
+  const tokens = new Map([["new:2", [{ kind: "variable", slot: 0, text: "count" }, { kind: "plain", text: " + " }, { kind: "variable", slot: 1, text: "other" }]]]);
+  for (const is_dark of [true, false]) {
+    h.nodes.length = 0;
+    h.mod.codeText(row, null, { foreground: "#ffffff", is_dark }, tokens);
+    const colors = h.nodes.map(n => n.textColor).filter(Boolean);
+    assert.ok(colors.includes(syntax.identifierColor(0, is_dark)), `slot 0 on ${is_dark ? "dark" : "light"}`);
+    assert.ok(colors.includes(syntax.identifierColor(1, is_dark)));
+  }
 });
 
 for (const full of [false, true]) test(`${full ? "full review" : "sidebar"} shows a neutral empty state outside Git and recovers on Refresh`, async () => {

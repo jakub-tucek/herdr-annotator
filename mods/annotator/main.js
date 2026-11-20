@@ -3,7 +3,7 @@ import { v_flex, h_flex, v_resizable, resizable_panel, v_virtual_list, Scrollbar
 import { spaces, panes, focused, agents, exec, home, props, theme, settings, shared, setShared, run, layout, appHome, watchFolder, machines, nextCommand } from "herdr";
 import { selectionFor, selectionPayload, selected, inlineAt, pendingComments, sessionTarget, fileStats, pathParts, commentStatus, commentLocation, reviewSummary, sendHint, unreadItems, visibleComments, layoutSidebar, reviewSidebarTransition, fullPreferences, snapshotFailure, needsFreshSnapshot, savedBaseChoice } from "./review.js";
 import { renderFull } from "./full.js";
-import { highlightDiff } from "./syntax.js";
+import { highlightDiff, colorIdentifiers, identifierColor } from "./syntax.js";
 import { DraftLifecycle } from "./draft.js";
 import { GithubRefresh } from "./github-refresh.js";
 import { reviewLocation } from "./review.js";
@@ -37,7 +37,7 @@ export default class Annotator extends View {
     const preferences = this.fullSettings();
     this.commentsOpen = preferences.commentsOpen;
     this.diffStyle = preferences.diffStyle;
-    this.syntax = preferences.syntax; this.syntaxCache = null;
+    this.syntax = preferences.syntax; this.semantic = preferences.semantic; this.syntaxCache = null;
     this.onlyUnread = this.full && preferences.onlyUnread;
     const widths = shared("annotator.fullWidths");
     this.fullWidths = Array.isArray(widths) && [2, 3].includes(widths.length) && widths.every(n => Number.isFinite(n) && n > 0)
@@ -619,7 +619,8 @@ export default class Annotator extends View {
     if (!file || (!this.full && file.rows.length > 120)) { this.syntaxCache = null; return; }
     const key = JSON.stringify([snapshot.revision, file.path]);
     if (this.syntaxCache?.key === key) return;
-    const tokens = highlightDiff(file.rows, file.path);
+    const lexical = highlightDiff(file.rows, file.path);
+    const tokens = this.semantic ? colorIdentifiers(lexical, file.path) : lexical;
     // The compact sidebar builds its code eagerly. Bound its native text-run
     // count; full review virtualizes rows and can color the whole preview.
     const count = [...tokens.values()].reduce((sum, line) => sum + line.length, 0);
@@ -643,7 +644,8 @@ export default class Annotator extends View {
     // painted layer and use one exact-text native surface as its hit target.
     return div().relative().flex_1().min_w(0)
       .child(h_flex().w_full().min_w(0).flex_wrap().items_start().gap(0)
-        .children(tokens.map(token => div().max_w("100%").text_color(colors[token.kind] ?? t.foreground).child(token.text))))
+        .children(tokens.map(token => div().max_w("100%").text_color(token.kind === "variable"
+          ? identifierColor(token.slot, t.is_dark !== false) : colors[token.kind] ?? t.foreground).child(token.text))))
       .child(text.absolute().inset_0().w_full().text_color("#00000000"));
   }
 
